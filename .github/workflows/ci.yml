@@ -44,7 +44,7 @@ jobs:
           fetch-depth: 0
 
       - name: Conventional Commits lint
-        uses: wagoid/commitlint-github-action@v5
+        uses: wagoid/commitlint-github-action@v6
         with:
           configFile: commitlint.config.cjs
           failOnWarnings: true
@@ -176,7 +176,7 @@ jobs:
   osv-pr:
     name: OSV-Scanner (PR diff)
     if: github.event_name == 'pull_request'
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.3.5
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.3.8
     permissions:
       contents: read
       security-events: write
@@ -186,7 +186,7 @@ jobs:
   osv-full:
     name: OSV-Scanner (full repo)
     if: github.event_name != 'pull_request'
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.5
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.8
     permissions:
       contents: read
       security-events: write
