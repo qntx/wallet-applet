@@ -22,11 +22,11 @@ slf4j        = "2.0.18"
 
 # Host CLI stack (tools/ module).
 picocli      = "4.7.7"
-jline        = "3.30.4"
-jackson-jr   = "2.19.1"
+jline        = "4.1.2"
+jackson-jr   = "2.21.3"
 
 # Testing.
-junit = "6.0.3"
+junit = "6.1.0"
 
 # Static analysis / formatting.
 spotless           = "8.5.1"
