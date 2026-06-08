@@ -10,8 +10,8 @@ javacard-target = "3.0.5"
 
 # Martin Paljak ecosystem (published to mvn.javacard.pro). Date-versioned.
 ant-javacard      = "26.05.15"
-apdu4j            = "26.04.20.1"
-globalplatformpro = "26.04.20.1"
+apdu4j            = "26.06.04"
+globalplatformpro = "26.06.04"
 
 # Card simulator (com.klinec fork on Maven Central).
 jcardsim = "3.0.6.0"
@@ -22,14 +22,14 @@ slf4j        = "2.0.18"
 
 # Host CLI stack (tools/ module).
 picocli      = "4.7.7"
-jline        = "3.30.4"
-jackson-jr   = "2.19.1"
+jline        = "4.1.3"
+jackson-jr   = "2.22.0"
 
 # Testing.
-junit = "6.0.3"
+junit = "6.1.0"
 
 # Static analysis / formatting / supply-chain.
-spotless           = "8.5.1"
+spotless           = "8.6.0"
 google-java-format = "1.35.0"
 ktlint             = "1.8.0"
 foojay-resolver    = "1.0.0"
