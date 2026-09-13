@@ -10,7 +10,7 @@ import javacard.framework.Util;
 import javacard.security.Signature;
 
 /**
- * PKI personalisation manager per {@code docs/specs/protocol.md} §8.
+ * PKI personalisation manager per {@code notes/specs/protocol.md} §8.
  *
  * <h2>Flow</h2>
  *
@@ -186,7 +186,7 @@ public final class PkiManager {
     }
 
     /**
-     * Reset-to-factory hook. Per {@code docs/specs/protocol.md} §8 the authentikey is preserved;
+     * Reset-to-factory hook. Per {@code notes/specs/protocol.md} §8 the authentikey is preserved;
      * the manufacturer-issued certificate is logically wiped so a re-personalised card can install
      * a fresh one.
      *

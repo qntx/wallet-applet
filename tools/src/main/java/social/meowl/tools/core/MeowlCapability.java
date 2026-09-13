@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * Host-side mirror of the applet capability bitmask reported by {@code GET_INFO} (tag {@code 0x04},
- * see {@code social.meowl.wallet.Constants} and {@code docs/specs/protocol.md} §5).
+ * see {@code social.meowl.wallet.Constants} and {@code notes/specs/protocol.md} §5).
  *
  * <p>Each constant carries its single-bit mask; {@link #decode(int)} expands a raw bitmask into the
  * ordered list of capabilities it advertises. Declaration order is ascending by mask so rendered

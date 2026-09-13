@@ -8,7 +8,7 @@ import java.util.Optional;
 
 /**
  * Host-side mirror of the applet lifecycle state reported by {@code GET_INFO} (tag {@code 0x03},
- * see {@code social.meowl.wallet.LifecycleState} and {@code docs/specs/protocol.md} §4).
+ * see {@code social.meowl.wallet.LifecycleState} and {@code notes/specs/protocol.md} §4).
  *
  * <p><strong>Maintenance:</strong> any new applet lifecycle state must be mirrored here.
  */

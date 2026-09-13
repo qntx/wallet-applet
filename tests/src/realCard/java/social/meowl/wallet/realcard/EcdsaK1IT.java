@@ -328,7 +328,7 @@ class EcdsaK1IT {
     /**
      * Recovers the public-key recovery byte {@code v ∈ {0, 1}} from a low-{@code s} signature by
      * trying both candidates and comparing against the expected pubkey. This mirrors the host-side
-     * recovery work that {@code docs/specs/protocol.md} §10 delegates off-card.
+     * recovery work that {@code notes/specs/protocol.md} §10 delegates off-card.
      */
     private static int recoverV(byte[] expectedCompressedPub, byte[] digest, byte[] sig64) {
         BigInteger r = new BigInteger(1, Arrays.copyOfRange(sig64, 0, 32));

@@ -45,7 +45,7 @@ The codebase and release process enforce:
 The applet is correct only under the following platform assumptions; deployments that diverge from them must re-audit the affected paths:
 
 - **Single logical channel.** The applet assumes the GlobalPlatform-defined basic-channel model: at any time exactly one channel holds the applet selected and `process(APDU)` is reentrant only across distinct `select()` boundaries. The `LifecycleState`, `SecureChannel` and `PinManager` state machines are not declared `volatile` and would race under simultaneous logical channels. JC 3.0.5 host platforms typically do not multiplex this applet across channels; deployments that do MUST add explicit cross-channel coordination.
-- **Silicon-validated ECDH.** As required by [the protocol spec](./docs/specs/protocol.md) §6, the underlying `KeyAgreement.ALG_EC_SVDP_DH_PLAIN_XY` implementation is trusted to reject peer pubkeys that are not on the secp256k1 curve. Deployments MUST add an admission check (e.g. JCAlgTest probe) that exercises an off-curve point and verifies a `6FB2` response.
+- **Silicon-validated ECDH.** As required by [the protocol spec](./notes/specs/protocol.md) §6, the underlying `KeyAgreement.ALG_EC_SVDP_DH_PLAIN_XY` implementation is trusted to reject peer pubkeys that are not on the secp256k1 curve. Deployments MUST add an admission check (e.g. JCAlgTest probe) that exercises an off-curve point and verifies a `6FB2` response.
 - **TRNG availability.** ECDSA nonces, Schnorr aux randomness and `GENERATE_SEED` rely on `RandomData.ALG_KEYGENERATION` falling back to `ALG_TRNG`. Cards whose `RandomData` is software-only (DRBG seeded by power-on counter) MUST NOT be qualified for production.
 
 ## Hardware lifecycle considerations

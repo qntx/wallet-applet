@@ -9,7 +9,7 @@ import javacard.framework.Util;
 
 /**
  * Helpers for writing simplified BER-TLV records of the form {@code [tag(1) | length(1) |
- * value(length)]} with {@code length ∈ [0, 255]} per {@code docs/specs/protocol.md} §5.
+ * value(length)]} with {@code length ∈ [0, 255]} per {@code notes/specs/protocol.md} §5.
  *
  * <p>Every method returns the offset immediately past the last byte written, so call sites can
  * chain writes without keeping a separate cursor. Misuse (oversized value, illegal offset,

@@ -11,7 +11,7 @@ import javacard.framework.ISOException;
  *
  * <p>Every magic number that appears on the APDU wire or in a policy threshold is declared here so
  * the rest of the codebase stays free of literal hex constants and the protocol spec under {@code
- * docs/specs/} can be diffed against a single file.
+ * notes/specs/} can be diffed against a single file.
  *
  * <p>JavaCard 3.0.5 has no {@code enum}, so {@code byte} / {@code short} literals are the idiomatic
  * representation.
@@ -32,11 +32,11 @@ public final class Constants {
 
     /**
      * Class byte for every command the meowl applet processes. ISO 7816-4 private-class range; see
-     * {@code docs/specs/protocol.md} §1.
+     * {@code notes/specs/protocol.md} §1.
      */
     public static final byte CLA_MEOWL = (byte) 0x80;
 
-    /*  INS table — see docs/specs/protocol.md §2 for the wire contract.
+    /*  INS table — see notes/specs/protocol.md §2 for the wire contract.
      *
      *  Banding convention (so reviewers can read intent from the opcode alone):
      *    0x00–0x0F  lifecycle / identity / capability discovery
@@ -160,7 +160,7 @@ public final class Constants {
      * {@code n} is the number of additional {@code RESET_TO_FACTORY} invocations still required to
      * trigger the wipe. {@code n == 0} signals that the wipe has been performed.
      *
-     * <p>Range used: {@code 0x6FA0}–{@code 0x6FAF}. See {@code docs/specs/protocol.md} §4.
+     * <p>Range used: {@code 0x6FA0}–{@code 0x6FAF}. See {@code notes/specs/protocol.md} §4.
      */
     public static final short SW_RESET_COUNTDOWN_BASE = (short) 0x6FA0;
 
@@ -362,7 +362,7 @@ public final class Constants {
 
     /**
      * Number of consecutive un-interleaved {@code RESET_TO_FACTORY} invocations required to trigger
-     * the wipe. See {@code docs/specs/protocol.md} §4.
+     * the wipe. See {@code notes/specs/protocol.md} §4.
      */
     public static final byte RESET_REQUIRED_INVOCATIONS = (byte) 4;
 

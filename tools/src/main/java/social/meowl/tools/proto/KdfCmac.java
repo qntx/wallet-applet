@@ -30,7 +30,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
  * java.security.Provider)}; the JDK does not ship a CMAC primitive directly. The provider is
  * registered statically by {@link HostCrypto}, so callers do not need to bootstrap it.
  *
- * <p>See {@code applet/.../Kdf.java} for the on-card counterpart and {@code docs/specs/protocol.md}
+ * <p>See {@code applet/.../Kdf.java} for the on-card counterpart and {@code notes/specs/protocol.md}
  * §6.2 for the wire-protocol context.
  */
 public final class KdfCmac {

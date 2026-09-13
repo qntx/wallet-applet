@@ -106,5 +106,5 @@ Applet identifiers and the CAP package version are overridable via Gradle proper
 1. Reserve an `INS` constant in `WalletApplet`.
 2. Add a private handler and dispatch it from `process(...)`.
 3. Add a JCardSim test under `tests/` covering both the success path and the relevant failure status words.
-4. Document the APDU in `docs/protocol.md` (create the file if it does not yet exist).
+4. Document the APDU in `notes/specs/protocol.md` (create the file if it does not yet exist).
 5. If the APDU exposes secrets, justify the secure-channel choice in the PR description.

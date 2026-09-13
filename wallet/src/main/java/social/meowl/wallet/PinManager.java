@@ -9,7 +9,7 @@ import javacard.framework.JCSystem;
 import javacard.framework.OwnerPIN;
 
 /**
- * User PIN + PUK manager per {@code docs/specs/protocol.md} §7.
+ * User PIN + PUK manager per {@code notes/specs/protocol.md} §7.
  *
  * <p>Holds one user PIN and one unblock PUK, each backed by {@link OwnerPIN} for JC-native
  * bounded-retry counters and storage protection. Status-word semantics:

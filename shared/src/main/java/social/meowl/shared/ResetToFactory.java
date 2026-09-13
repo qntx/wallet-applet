@@ -8,7 +8,7 @@ import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 
 /**
- * Multi-step {@code RESET_TO_FACTORY} trigger per {@code docs/specs/protocol.md} §4.
+ * Multi-step {@code RESET_TO_FACTORY} trigger per {@code notes/specs/protocol.md} §4.
  *
  * <p>Each {@code RESET_TO_FACTORY} APDU decrements an internal counter via {@link
  * #recordInvocation}; any other APDU re-arms it via {@link #rearm()}. The status word returned to

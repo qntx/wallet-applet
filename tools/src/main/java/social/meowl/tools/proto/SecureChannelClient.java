@@ -16,7 +16,7 @@ import java.util.Objects;
  * Host-side client for the meowl Secure Channel. One instance corresponds to one open session,
  * identified by the ephemeral keypair generated at {@link #handshake} time.
  *
- * <p>Wire layout (see {@code docs/specs/protocol.md} §6):
+ * <p>Wire layout (see {@code notes/specs/protocol.md} §6):
  *
  * <ul>
  *   <li>handshake: {@code [client_eph_pub(65)]} → {@code [card_eph_pub(65) | sigLen(2 BE) | sig]}

@@ -684,7 +684,7 @@ public final class WalletApplet extends Applet implements WipeTrigger {
     }
 
     /**
-     * Reset-to-factory wipe. Per {@code docs/specs/protocol.md} §4 the authentikey is preserved;
+     * Reset-to-factory wipe. Per {@code notes/specs/protocol.md} §4 the authentikey is preserved;
      * Secure Channel state, PIN/PUK gates, PKI cert state, master-seed gates and lifecycle state
      * are reset.
      *
