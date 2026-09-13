@@ -4,7 +4,7 @@
 
 Hardware-wallet applet for [meowl.social](https://meowl.social).
 
-See [docs/](docs/).
+See [notes/](notes/).
 
 ## License
 
