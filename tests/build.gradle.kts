@@ -1,3 +1,9 @@
+import java.time.LocalDateTime
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
 plugins {
     java
     alias(libs.plugins.pitest)
@@ -15,8 +21,15 @@ val vectorGen: SourceSet by sourceSets.creating {
     java.srcDir(rootProject.layout.projectDirectory.dir("spec/vectors/gen/java"))
 }
 
+val realCard: SourceSet by sourceSets.creating {
+    java.srcDir("src/realCard/java")
+}
+
+val antJavaCard: Configuration by configurations.creating
+
 dependencies {
     agent(project(path = ":sim", configuration = "agent"))
+    antJavaCard(libs.ant.javacard)
     testImplementation(project(":sim"))
     testCompileOnly(files(apiClassicJar))
     testImplementation(project(":applet"))
@@ -28,6 +41,13 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
     "vectorGenImplementation"(libs.bouncycastle.prov)
 }
+
+// the real-card suite reuses the test classpath (Vecs, Spec, the host library,
+// BouncyCastle) plus the compiled test classes themselves (architecture.md §10)
+realCard.compileClasspath += sourceSets.test.get().compileClasspath
+realCard.compileClasspath += sourceSets.test.get().output
+realCard.runtimeClasspath += sourceSets.test.get().runtimeClasspath
+realCard.runtimeClasspath += sourceSets.test.get().output
 
 tasks.test {
     useJUnitPlatform()
@@ -150,3 +170,240 @@ pitest {
 }
 
 tasks.named("pitest") { dependsOn(":applet:cap", agent) }
+
+// ---------------------------------------------------------------------------
+// Real-card suite (architecture.md §10): the source set compiles in CI, the
+// tests themselves run only with -PrealCard=<reader>; see spec/protocol.md §3
+// for the silicon admission items they measure.
+// ---------------------------------------------------------------------------
+
+val jcKitDir = rootProject.layout.projectDirectory.dir("sdks/${libs.versions.javacard.sdk.get()}")
+val targetSdk =
+    libs.versions.javacard.target
+        .get()
+
+val probeCapFile = layout.buildDirectory.file("cap/qntx-probe.cap")
+val memCapFile = layout.buildDirectory.file("cap/qntx-card-memprobe.cap")
+
+/**
+ * The same deterministic-CAP rewrite as `:applet:cap` (architecture.md §7): fixed entry times and
+ * no build-time manifest attributes, entry order and component bytes kept.
+ */
+fun normalizeCap(cap: File) {
+    val volatile = setOf("Created-By", "Java-Card-CAP-Creation-Time")
+    val fixed = LocalDateTime.of(1980, 2, 1, 0, 0)
+    val tmp = File(cap.parentFile, cap.name + ".tmp")
+    ZipFile(cap).use { zip ->
+        ZipOutputStream(tmp.outputStream()).use { out ->
+            for (e in zip.entries()) {
+                var data = zip.getInputStream(e).readBytes()
+                if (e.name == "META-INF/MANIFEST.MF") {
+                    data =
+                        String(data, Charsets.UTF_8)
+                            .split("\r\n")
+                            .filterNot { line -> volatile.any { line.startsWith("$it:") } }
+                            .joinToString("\r\n")
+                            .toByteArray(Charsets.UTF_8)
+                }
+                val n = ZipEntry(e.name)
+                n.timeLocal = fixed
+                if (e.method == ZipEntry.STORED) {
+                    n.method = ZipEntry.STORED
+                    n.size = data.size.toLong()
+                    n.compressedSize = data.size.toLong()
+                    n.crc = CRC32().apply { update(data) }.value
+                }
+                out.putNextEntry(n)
+                out.write(data)
+                out.closeEntry()
+            }
+        }
+    }
+    check(tmp.renameTo(cap)) { "cannot replace $cap" }
+}
+
+fun javacardCap(
+    sources: File,
+    packageAid: String,
+    packageName: String,
+    appletClass: String,
+    appletAid: String,
+    output: File,
+) {
+    val kit = jcKitDir.asFile
+    check(kit.isDirectory) { "JavaCard SDK missing at $kit: run `git submodule update --init`" }
+    output.parentFile.mkdirs()
+    ant.withGroovyBuilder {
+        "taskdef"("name" to "javacard", "classname" to "pro.javacard.ant.JavaCard", "classpath" to antJavaCard.asPath)
+        "javacard"("jckit" to kit.absolutePath) {
+            "cap"(
+                "targetsdk" to targetSdk,
+                "aid" to packageAid,
+                "package" to packageName,
+                "version" to "1.0",
+                "output" to output.absolutePath,
+                "sources" to sources.absolutePath,
+                "verify" to "true",
+                "debug" to "false",
+                "ints" to "false",
+            ) {
+                "applet"("class" to appletClass, "aid" to appletAid)
+            }
+        }
+    }
+    normalizeCap(output)
+}
+
+val probeCap by tasks.registering {
+    group = "build"
+    description =
+        "Converts the admission probe applet into qntx-probe.cap (a test build, never released)."
+    val sources = layout.projectDirectory.dir("src/realCard/javacard/probe")
+    inputs.files(antJavaCard).withPropertyName("antJavaCard")
+    inputs.dir(sources).withPropertyName("sources")
+    inputs.dir(jcKitDir).withPropertyName("jckit")
+    outputs.file(probeCapFile)
+    doLast {
+        javacardCap(
+            sources.asFile,
+            "F0716E7478FF",
+            "org.qntx.card.probe",
+            "org.qntx.card.probe.AdmissionProbe",
+            "F0716E7478FF01",
+            probeCapFile.get().asFile,
+        )
+    }
+}
+
+val memProbeCap by tasks.registering {
+    group = "build"
+    description =
+        "Builds qntx-card-memprobe.cap: the production applet plus MemProbe instrumentation" +
+        " (a test build, never released)."
+    val appletSources =
+        project(":applet").layout.projectDirectory.dir("src/main/java")
+    val probeSources =
+        layout.projectDirectory.dir("src/realCard/javacard/memprobe")
+    val staged = layout.buildDirectory.dir("memprobe-src")
+    inputs.files(antJavaCard).withPropertyName("antJavaCard")
+    inputs.dir(appletSources).withPropertyName("appletSources")
+    inputs.dir(probeSources).withPropertyName("probeSources")
+    inputs.dir(jcKitDir).withPropertyName("jckit")
+    outputs.file(memCapFile)
+    dependsOn(":applet:cap")
+    doLast {
+        val dir = staged.get().asFile
+        dir.deleteRecursively()
+        appletSources.asFile.copyRecursively(dir)
+        var commits = 0
+        dir.walkTopDown().filter { it.extension == "java" }.forEach { f ->
+            var text = f.readText()
+            // (a) every commit site reports the unused commit capacity first (§3 item 8)
+            val marker = "JCSystem.commitTransaction();"
+            var count = text.split(marker).size - 1
+            if (count > 0) {
+                text = text.replace(marker, "MemProbe.commit();")
+                commits += count
+            }
+            if (f.name == "WalletApplet.java") {
+                // (b) per-command log reset and the 0xFE report command
+                val begin = "        short lc = receiveAll(apdu);"
+                count = text.split(begin).size - 1
+                check(count == 1) { "memprobe: receiveAll site not found in WalletApplet.java" }
+                text =
+                    text.replace(
+                        begin,
+                        "        MemProbe.begin(buf);\n" + begin,
+                    )
+                val outerDefault =
+                    "            default:\n" +
+                        "                ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);"
+                count = text.split(outerDefault).size - 1
+                check(count == 1) { "memprobe: outer default not found in WalletApplet.java" }
+                text =
+                    text.replace(
+                        outerDefault,
+                        "            case (byte) 0xFE:\n" +
+                            "                len = MemProbe.report(apdu);\n" +
+                            "                break;\n" +
+                            outerDefault,
+                    )
+                // (c) the install window
+                val ctor = "        new WalletApplet(bArray, bOffset);"
+                count = text.split(ctor).size - 1
+                check(count == 1) { "memprobe: install body not found in WalletApplet.java" }
+                text =
+                    text.replace(
+                        ctor,
+                        "        MemProbe.installStart();\n" +
+                            ctor + "\n" +
+                            "        MemProbe.installEnd();",
+                    )
+            }
+            f.writeText(text)
+        }
+        check(commits == 7) { "memprobe: expected 7 commitTransaction sites, found $commits" }
+        probeSources.asFile.copyRecursively(dir)
+        // a test-only instrumentation class must never reach the production CAP
+        val prod = cap.get().asFile
+        check(prod.isFile) { "production CAP missing at $prod" }
+        check(!prod.readBytes().let { String(it, Charsets.ISO_8859_1).contains("MemProbe") }) {
+            "production CAP at $prod contains a MemProbe reference"
+        }
+        javacardCap(
+            dir,
+            "F0716E747800",
+            "org.qntx.card",
+            "org.qntx.card.WalletApplet",
+            "F0716E74780101",
+            memCapFile.get().asFile,
+        )
+    }
+}
+
+val realCardOut = providers.gradleProperty("realCardOut")
+
+val realCardTask =
+    tasks.register<Test>("realCard") {
+        group = "verification"
+        description =
+            "Runs the real-card suite of architecture.md §10 on a PC/SC reader" +
+            " (-PrealCard=<reader>, never in CI; reports \"not run\" without one)."
+        useJUnitPlatform()
+        testClassesDirs = realCard.output.classesDirs
+        classpath = realCard.runtimeClasspath
+        dependsOn(":applet:cap", probeCap, memProbeCap)
+        // a hardware suite is never up to date
+        outputs.upToDateWhen { false }
+        systemProperty("qntx.reader", providers.gradleProperty("realCard").orElse("").get())
+        systemProperty("qntx.gp", providers.gradleProperty("realCardGp").orElse("").get())
+        systemProperty("qntx.cap", cap.get().asFile.absolutePath)
+        systemProperty("qntx.memcap", memCapFile.get().asFile.absolutePath)
+        systemProperty("qntx.probecap", probeCapFile.get().asFile.absolutePath)
+        systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
+        systemProperty(
+            "qntx.realcard.out",
+            realCardOut
+                .orElse(
+                    layout.buildDirectory
+                        .dir("realcard")
+                        .get()
+                        .asFile.absolutePath,
+                ).get(),
+        )
+        systemProperty(
+            "qntx.realcard.differential",
+            providers.gradleProperty("realCardDifferential").orElse("1000").get(),
+        )
+        systemProperty(
+            "qntx.realcard.rng",
+            providers.gradleProperty("realCardRng").orElse("1048576").get(),
+        )
+        testLogging {
+            events("passed", "skipped", "failed")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+    }
+
+// the suite never runs in CI but must always compile there (architecture.md §14.7 R4)
+tasks.check { dependsOn(tasks.named("compileRealCardJava")) }
