@@ -236,7 +236,7 @@ final class Wallet {
         }
         // step 3: evaluated once — a skip buys one unwaited attempt, never more (§16.2 item 4)
         if (fa >= Const.FREE_ATTEMPTS && session.waited() < Const.WAIT_UNITS) {
-            ISOException.throwIt(ISO7816.SW_CONDITIONS_NOT_SATISFIED);
+            ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
         // step 4
         session.clearWaited();

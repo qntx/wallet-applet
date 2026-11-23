@@ -305,7 +305,8 @@ On a match the seed is `CBC⁻¹(K_enc, 0¹⁶, ct)`. On a mismatch nothing is d
 represent has been committed and read back (T-FAIL). A match resets the count (T-OK). When `f`
 reaches `L` the wallet is erased (T-ERASE). The first `F` attempts after a success are immediate;
 while `f ≥ F`, each attempt requires that `W` `WAIT` units (§9.15) have been completed in the same
-session since the previous attempt. Waiting is session state only: a power loss discards it and
+session since the previous attempt; otherwise `VERIFY` returns `6986` without comparing. Waiting
+is session state only: a power loss discards it and
 never changes `f`. The exact order is in §9.5.
 
 ## 8. Secure session
@@ -443,8 +444,9 @@ multiselectable.)
 
 **Checking order.** Every inner command checks, in this order, returning the first failure:
 `INS` known (else `6D00`); `life` allows the command (else `6985`); `P1`/`P2` (else `6A86`);
-length (else `6700`); verified if required (else `6982`); other preconditions (`6985`); data
-validity (`6A80`); then the effect. Unless stated otherwise `P1 = P2 = 0x00` is required.
+length (else `6700`); verified if required (else `6982`); other preconditions (`6985`; the wait
+of `VERIFY`, §9.5 step 3: `6986`); data validity (`6A80`); then the effect. Unless stated
+otherwise `P1 = P2 = 0x00` is required.
 
 **Pending states.** Three multi-command operations keep state between commands: the Ed25519
 stream (§9.11), the pending export (§9.13) and the pending import (§9.14). Before dispatching an
@@ -478,7 +480,7 @@ check at that position). The command sections give the effects.
 | --- | --- | --- | --- | --- | --- | --- |
 | `STATUS` | `BLANK`, `LOADED` | `00 00` | 0 | — | — | — |
 | `CREATE` | `BLANK` | `P1 ∈ {00, 01}`, `P2 = 00` | `P1 = 00`: 64, 80, 96; `P1 = 01`: 96, 112, 128 | — | — | `others` pairwise distinct; none equals `ID(A)`; (`P1 = 01`) BIP-32 master valid |
-| `VERIFY` | `LOADED` | `00 00` | 32 | — | wait complete if `F ≤ f < L` (§9.5 steps 2–3: `f ≥ L` erases first) | — (outcome `9000`, `63Cx`, `6983` or `6F00` per §9.5) |
+| `VERIFY` | `LOADED` | `00 00` | 32 | — | wait complete if `F ≤ f < L`, else `6986` (§9.5 steps 2–3: `f ≥ L` erases first) | — (outcome `9000`, `63Cx`, `6983` or `6F00` per §9.5) |
 | `CHANGE` | `LOADED` | `00 00` | 32 | required | — | — |
 | `ERASE` | `LOADED` | `00 00` | 0 | required | — | — |
 | `WAIT` | `LOADED` | `00 00` | 0 | — | — | — |
@@ -541,7 +543,7 @@ Data: `accessHash(32)` (`Lc = 32`, else `6700`).
 2. Read `fails` from persistent memory twice, independently, into `f_a` and `f_b`. If the
    complement of either read disagrees: T-ERASE, return `6F00`. If `f_a ≥ L` or `f_b ≥ L`:
    T-ERASE, return `6983`. Each test is thus evaluated twice, once per read (§16.2).
-3. If `f_a ≥ F` and `waited < W`: return `6985`. Nothing is written and the candidate is not used.
+3. If `f_a ≥ F` and `waited < W`: return `6986`. Nothing is written and the candidate is not used.
 4. `waited ← 0`.
 5. T-FAIL: `fails ← f_a + 1` with its complement; commit.
 6. Read-back gate, evaluated twice independently (§16.2), each on a fresh read `f₁` of `fails`:
@@ -927,7 +929,8 @@ This section and §13.2 cover the wallet applet; the NDEF applet's status words 
 | `6700` | — | Wrong data length, or record plaintext shorter than 3 bytes |
 | `6982` | — | Access code not verified in this session |
 | `6983` | — | The failure limit was reached; the wallet on this card has been erased |
-| `6985` | — | Wrong `life`; no offer; no pending stream, export or import; Ed25519 counter exhausted; `VERIFY` while `f ≥ F` without `W` completed `WAIT` units |
+| `6985` | — | Wrong `life`; no offer; no pending stream, export or import; Ed25519 counter exhausted |
+| `6986` | — | `VERIFY` while `F ≤ f < L` without `W` `WAIT` units completed in this session since the previous attempt (§7.3, §9.5 step 3); nothing was written |
 | `6A80` | — | Invalid data: member IDs, seed, path, tweak, derived key, certificate, signature, point, MAC, padding, payload, re-seal of a different wallet |
 | `6A86` | — | Wrong `P1`/`P2` |
 | `6D00` | — | Unknown inner `INS` |
@@ -1152,5 +1155,5 @@ files give exact bytes.
 | `bip340.json` | 12.2 | BIP-340 official vectors; BIP-341/BIP-86 tweak cases; fixed-`aux` exact signatures | BIP-340 reference CSV; BIP-86 vectors; noble `schnorr` |
 | `ed25519.json` | 10.4, 12.3 | RFC 8032 §7.1 vectors (verification); fixed `N`, `Zr`, card ID → exact `r`, `W(R)`, `S`; two card IDs with equal `N` and `Zr` give different `r`; a wrong stream gives an invalid signature | RFC 8032; noble `ed25519`; libsodium |
 | `apdu.json` | 9, 13, 14 | Every command's encoding; for each command every precondition in checking order with its status word | Generated from this document's tables by `spec/vectors/gen/apdu.py` |
-| `verify-sequence.json` | 7.3, 9.3, 9.5, 9.12, 9.14, 9.15 | Command sequences with the expected inner status word and `STATUS` after each step: wrong codes from `f = 0` to `L` (`63C9` … `63C7`, then `6985` until `W` `WAIT`s, `63C6` … `63C1`, `6983`); `waited` lost on a new `OPEN`; `WAIT` beyond `W`; a right code at every `f < L` resets; the `tries = 0` state (power loss after the `L`-th T-FAIL) where the next `VERIFY` returns `6983` without comparing; a re-seal of a `LOADED` card resets `fails`; `OFFER` repeated with a valid offer returns the same `LK`; `IMPORT` `P1 = 0x00` after a committed install returns `6985` | Generated from §9 by `spec/vectors/gen/sequence.py`; replayed by the card suite and by the qntx/wallet protocol client against the simulator |
+| `verify-sequence.json` | 7.3, 9.3, 9.5, 9.12, 9.14, 9.15 | Command sequences with the expected inner status word and `STATUS` after each step: wrong codes from `f = 0` to `L` (`63C9` … `63C7`, then `6986` until `W` `WAIT`s, `63C6` … `63C1`, `6983`); `waited` lost on a new `OPEN`; `WAIT` beyond `W`; a right code at every `f < L` resets; the `tries = 0` state (power loss after the `L`-th T-FAIL) where the next `VERIFY` returns `6983` without comparing; a re-seal of a `LOADED` card resets `fails`; `OFFER` repeated with a valid offer returns the same `LK`; `IMPORT` `P1 = 0x00` after a committed install returns `6985` | Generated from §9 by `spec/vectors/gen/sequence.py`; replayed by the card suite and by the qntx/wallet protocol client against the simulator |
 | `ndef.json` | 15 | Capability container and NDEF file for sample messages; READ BINARY offsets | NFC Forum T4T 2.0 §5 by hand |
