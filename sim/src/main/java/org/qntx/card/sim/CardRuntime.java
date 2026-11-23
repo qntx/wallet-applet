@@ -73,9 +73,8 @@ public final class CardRuntime extends SimulatorRuntime {
     private final int[] digestResets = new int[64];
 
     /**
-     * Per-allocation charge of the install journal: 0 until calibrated against the memprobe
-     * measurement on card A (architecture §8 patch 2) — whether card A charges allocations is
-     * unverified until that run.
+     * Per-allocation charge of the install journal: the memprobe measured 0 on card A (architecture
+     * §8 patch 2) — allocations are not charged to the install journal there.
      */
     static final int INSTALL_ALLOC_CHARGE = 0;
 
@@ -289,7 +288,7 @@ public final class CardRuntime extends SimulatorRuntime {
     /**
      * Charge of one applet allocation observed by the agent ({@code new T[]}, {@code buildKey},
      * {@code makeTransient*}, engine {@code getInstance}) against the install journal — {@link
-     * #INSTALL_ALLOC_CHARGE} until card A's per-allocation cost is measured.
+     * #INSTALL_ALLOC_CHARGE} as measured on card A.
      */
     void installAlloc() {
         if (phase == Phase.INSTALL) {
