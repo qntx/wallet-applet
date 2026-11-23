@@ -55,15 +55,16 @@ final class CoreRealCardTest {
     void classCheckPrecedesInstructionCheck() throws Exception {
         Fixture.require();
         RealCard card = Fixture.card();
-        // every class other than 0x80 answers 6E00, even for a known INS
-        for (int cla : new int[] {0x00, 0x01, 0x40, 0x81, 0xFF}) {
+        // every class other than 0x80 answers 6E00, even for a known INS; CLAs encoding a
+        // logical channel (0x8x with channel bits, e.g. 0x81) never reach the applet — card
+        // A's JCRE answers them 6881 itself — so the probe uses channel-0 classes only
+        for (int cla : new int[] {0x00, 0x01, 0x40, 0xC0}) {
             assertEquals(
                     0x6E00,
                     RealCard.sw(card.transmit(new byte[] {(byte) cla, 0x12, 0, 0, 1, 0})),
                     "CLA " + cla);
         }
         assertEquals(0x6E00, RealCard.sw(card.transmit(unhex("00E0000000"))));
-        assertEquals(0x6E00, RealCard.sw(card.transmit(unhex("8100000000"))));
     }
 
     @Test
@@ -106,18 +107,19 @@ final class CoreRealCardTest {
     @Order(6)
     void personalizeTransitionsToBlank() throws Exception {
         Fixture.require();
-        Fixture.ensureFactory();
+        Fixture.ensureStrictFactory();
         RealCard card = Fixture.card();
-        card.ok(Fixture.personalizeApdu());
-        // PERSONALIZE is refused once BLANK (§7); GET_IDENTITY is refused outside FACTORY
-        assertEquals(0x6985, RealCard.sw(card.transmit(Fixture.personalizeApdu())));
-        assertEquals(0x6985, RealCard.sw(card.transmit(unhex("80E0000000"))));
-        // check order: life, then P1/P2, then length
+        // the §14.2 order (life, P1/P2, length) is only observable on a command the life gate
+        // lets through: once BLANK, personalize hits the gate (6985) before any P1 check
         byte[] p1 = Fixture.personalizeApdu();
         p1[2] = 1;
         assertEquals(0x6A86, RealCard.sw(card.transmit(p1)));
         assertEquals(0x6A86, RealCard.sw(card.transmit(unhex("80e2000100"))));
         assertEquals(0x6700, RealCard.sw(card.transmit(unhex("80e2000000"))));
+        card.ok(Fixture.personalizeApdu());
+        // PERSONALIZE is refused once BLANK (§7); GET_IDENTITY is refused outside FACTORY
+        assertEquals(0x6985, RealCard.sw(card.transmit(Fixture.personalizeApdu())));
+        assertEquals(0x6985, RealCard.sw(card.transmit(unhex("80E0000000"))));
         Fixture.ensureFactoryField(Fixture.Life.BLANK);
     }
 
@@ -125,7 +127,7 @@ final class CoreRealCardTest {
     @Order(7)
     void rejectedCertificatesKeepTheCardFactory() throws Exception {
         Fixture.require();
-        Fixture.ensureFactory();
+        Fixture.ensureStrictFactory();
         RealCard card = Fixture.card();
         byte[] a = Fixture.cardA();
         byte[] good = Vecs.certFor(a);
@@ -171,7 +173,7 @@ final class CoreRealCardTest {
     @Order(9)
     void openIsRefusedInFactoryAndChecksP1P2() throws Exception {
         Fixture.require();
-        Fixture.ensureFactory();
+        Fixture.ensureStrictFactory();
         RealCard card = Fixture.card();
         assertEquals(
                 0x6985,

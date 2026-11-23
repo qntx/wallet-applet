@@ -143,6 +143,10 @@ public final class Fixture {
         installed = kind;
         // a fresh wallet install always starts in FACTORY; the probe has no wallet state
         life = kind == CapKind.PROBE ? null : Life.FACTORY;
+        // A is generated per instance: a cert issued for the previous install would be
+        // refused with 6A80, so the cached identity must be refetched
+        cardA = null;
+        cert = null;
     }
 
     /** The CAP that should be on the card again before the suite ends (§14.3). */
@@ -164,6 +168,23 @@ public final class Fixture {
                     RealCard.PACKAGE_AID,
                     RealCard.APPLET_AID);
             life = Life.FACTORY;
+        }
+        card.ok(RealCard.SELECT);
+    }
+
+    /**
+     * True FACTORY for tests that cannot run in a later life state (a BLANK/LOADED card has no
+     * way back): reinstalls the selected wallet CAP unless the card is already known FACTORY.
+     */
+    public static void ensureStrictFactory() throws Exception {
+        if (life != Life.FACTORY) {
+            connect();
+            card.reinstall(
+                    capPath(CapKind.PROD),
+                    RealCard.PACKAGE_AID,
+                    RealCard.PACKAGE_AID,
+                    RealCard.APPLET_AID);
+            markInstalled(CapKind.PROD);
         }
         card.ok(RealCard.SELECT);
     }
@@ -263,6 +284,8 @@ public final class Fixture {
     public static void markInstalled(CapKind kind) {
         installed = kind;
         life = kind == CapKind.PROBE ? null : Life.FACTORY;
+        cardA = null;
+        cert = null;
     }
 
     /** Records a life-cycle change a test made outside the ensure* helpers. */
