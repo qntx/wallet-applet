@@ -28,23 +28,37 @@ import org.qntx.card.tests.Vecs;
 final class MemoryRealCardTest {
     /** The parsed {@code 80 FE 00 00 00} report of the memprobe build. */
     record Report(
-            long[] installStart, long[] installEnd, long[] current, int maxCommit, int[] unused) {
+            long[] installStart,
+            long[] installEnd,
+            long[] lazyStart,
+            long[] lazyEnd,
+            long[] current,
+            int maxCommit,
+            int fault,
+            int stage,
+            int[] unused) {
+        // wire layout (see MemProbe javadoc): five 3-u32 triples, then u16 max, u16 fault,
+        // u16 stage, u8 count, count × u16 unused; triple order [0] persistent, [1] reset,
+        // [2] deselect
         static Report parse(byte[] r) {
-            long[] a = new long[6];
-            long[] b = new long[6];
-            long[] c = new long[6];
-            for (int i = 0; i < 6; i++) {
-                a[i] = u32(r, 4 * i);
-                b[i] = u32(r, 24 + 4 * i);
-                c[i] = u32(r, 48 + 4 * i);
-            }
-            int max = u16(r, 72);
-            int count = r[74] & 0xFF;
+            long[] s = triple(r, 0);
+            long[] e = triple(r, 12);
+            long[] ls = triple(r, 24);
+            long[] le = triple(r, 36);
+            long[] c = triple(r, 48);
+            int max = u16(r, 60);
+            int fault = u16(r, 62);
+            int stage = u16(r, 64);
+            int count = r[66] & 0xFF;
             int[] unused = new int[count];
             for (int i = 0; i < count; i++) {
-                unused[i] = u16(r, 75 + 2 * i);
+                unused[i] = u16(r, 67 + 2 * i);
             }
-            return new Report(a, b, c, max, unused);
+            return new Report(s, e, ls, le, c, max, fault, stage, unused);
+        }
+
+        private static long[] triple(byte[] r, int off) {
+            return new long[] {u32(r, off), u32(r, off + 4), u32(r, off + 8)};
         }
 
         /** Consumption attributed to the reported command: max − min(unused). */
@@ -93,26 +107,31 @@ final class MemoryRealCardTest {
     void memProbeInstallAndPersonalise() throws Exception {
         Fixture.require();
         Fixture.ensureInstalled(Fixture.CapKind.MEM);
+        // the first SELECT fires the deferred construction (lazyInit) of the memprobe build
         Fixture.card().ok(RealCard.SELECT);
         Report base = report();
+        String[] names = {"persistent", "transientReset", "transientDeselect"};
         Map<String, Object> install = new LinkedHashMap<>();
         for (int i = 0; i < 3; i++) {
-            String[] names = {"persistent", "transientReset", "transientDeselect"};
-            install.put(names[i] + "Start", base.installStart()[i * 2]);
-            install.put(names[i] + "End", base.installEnd()[i * 2]);
-            install.put(names[i] + "Delta", base.installStart()[i * 2] - base.installEnd()[i * 2]);
+            install.put(names[i] + "Start", base.installStart()[i]);
+            install.put(names[i] + "End", base.installEnd()[i]);
+            install.put(names[i] + "Delta", base.installStart()[i] - base.installEnd()[i]);
         }
         install.put("maxCommitCapacity", base.maxCommit());
         rows.put("T-INSTALL", install);
-        // §3 item 8 + §16.6: after install at least 15 % of the DESELECT pool is free;
-        // the pool is the DESELECT memory available at install start
-        long pool = base.installStart()[4];
+        Map<String, Object> lazy = new LinkedHashMap<>();
+        for (int i = 0; i < 3; i++) {
+            lazy.put(names[i] + "Start", base.lazyStart()[i]);
+            lazy.put(names[i] + "End", base.lazyEnd()[i]);
+            lazy.put(names[i] + "Delta", base.lazyStart()[i] - base.lazyEnd()[i]);
+        }
+        rows.put("T-LAZY-INIT", lazy);
+        // §3 item 8 + §16.6: after the object graph is built at least 15 % of the DESELECT
+        // pool is free; the pool is the DESELECT memory available at install start
+        long pool = base.installStart()[2];
         assertTrue(
-                base.installEnd()[4] >= 0.15 * pool,
-                "CLEAR_ON_DESELECT after install "
-                        + base.installEnd()[4]
-                        + " < 15% of pool "
-                        + pool);
+                base.lazyEnd()[2] >= 0.15 * pool,
+                "CLEAR_ON_DESELECT after init " + base.lazyEnd()[2] + " < 15% of pool " + pool);
         // T-PERSO
         Fixture.card().ok(Fixture.personalizeApdu());
         Fixture.ensureFactoryField(Fixture.Life.BLANK);
@@ -124,6 +143,7 @@ final class MemoryRealCardTest {
     @Order(2)
     void createGenerateThenErase() throws Exception {
         Fixture.require();
+        session = Fixture.open();
         // T-CREATE P1 = 0, m = 0: accessHash ‖ hostEntropy
         byte[] data = new byte[64];
         System.arraycopy(Vecs.accessHash(), 0, data, 0, 32);
@@ -199,18 +219,20 @@ final class MemoryRealCardTest {
         Map<String, Object> after = new LinkedHashMap<>();
         String[] names = {"persistent", "transientReset", "transientDeselect"};
         for (int i = 0; i < 3; i++) {
-            after.put(names[i], end.current()[i * 2]);
+            after.put(names[i], end.current()[i]);
         }
         doc.put("availableNow", after);
-        // no allocation after install: the pools available now equal the install-end values
+        // no allocation after the object graph: pools available now are ≥ the lazyInit-end
+        // values (on the lazy build the graph itself legitimately consumes between install and
+        // first use, so the reference point is lazyInit end)
         for (int i = 0; i < 3; i++) {
             assertTrue(
-                    end.current()[i * 2] >= end.installEnd()[i * 2],
+                    end.current()[i] >= end.lazyEnd()[i],
                     names[i]
-                            + " pool shrank after install: "
-                            + end.current()[i * 2]
+                            + " pool shrank after lazyInit: "
+                            + end.current()[i]
                             + " < "
-                            + end.installEnd()[i * 2]);
+                            + end.lazyEnd()[i]);
         }
         // §3 item 8: every named transaction consumed at most half the commit capacity
         for (Map.Entry<String, Map<String, Object>> e : rows.entrySet()) {

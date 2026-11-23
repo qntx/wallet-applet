@@ -184,6 +184,68 @@ val targetSdk =
 
 val probeCapFile = layout.buildDirectory.file("cap/qntx-probe.cap")
 val memCapFile = layout.buildDirectory.file("cap/qntx-card-memprobe.cap")
+val lazyCapFile = layout.buildDirectory.file("cap/qntx-card-lazy.cap")
+
+/**
+ * The deferred-construction patch for a staged copy of {@code WalletApplet.java}: the object
+ * graph moves from the constructor into {@code lazyInit()}, called on first {@code select()} and
+ * {@code process()}, so its persistent writes happen outside the JCRE install journal. Card A's
+ * 5,120-byte commit buffer cannot hold them inside {@code install()} (real-card finding: the
+ * production CAP fails INSTALL with TransactionException.BUFFER_FULL at {@code new Ecdsa}).
+ * Test builds only — the production sources are never touched.
+ */
+fun applyLazyPatch(wa: File) {
+    var text = wa.readText()
+    // the nine object-graph fields become assignable on first use
+    val fieldMarker = "    private final "
+    var count = text.split(fieldMarker).size - 1
+    check(count == 9) { "lazy: expected 9 final fields in WalletApplet.java, found $count" }
+    text = text.replace(fieldMarker, "    private ")
+    val statements =
+        "        Const.init();\n" +
+            "        mem = new Mem();\n" +
+            "        state = new State();\n" +
+            "        ModArith modArith = new ModArith(mem);\n" +
+            "        Secp256k1 secp = new Secp256k1(mem, modArith);\n" +
+            "        Wei25519 wei = new Wei25519(mem);\n" +
+            "        identity = new Identity(mem, state, secp);\n" +
+            "        session = new Session(mem, state, secp, identity);\n" +
+            "        derivation = new Derivation(mem, session, secp, wei, modArith);\n" +
+            "        ecdsa = new Ecdsa(mem, session, derivation, secp);\n" +
+            "        bip340 = new Bip340(mem, session, derivation, secp, modArith);\n" +
+            "        ed25519 = new Ed25519(mem, state, session, derivation, wei, modArith, identity);\n" +
+            "        wallet = new Wallet(mem, state, session, identity, derivation);\n"
+    val ctorBody =
+        "    private WalletApplet(byte[] bArray, short bOffset) {\n" +
+            statements +
+            "        register(bArray, (short) (bOffset + 1), bArray[bOffset]);\n" +
+            "    }"
+    count = text.split(ctorBody).size - 1
+    check(count == 1) { "lazy: constructor body not found in WalletApplet.java" }
+    text =
+        text.replace(
+            ctorBody,
+            "    private WalletApplet(byte[] bArray, short bOffset) {\n" +
+                "        register(bArray, (short) (bOffset + 1), bArray[bOffset]);\n" +
+                "    }\n\n" +
+                "    /** TEST BUILD: the object graph is built on first use (see lazyCap). */\n" +
+                "    private void lazyInit() {\n" +
+                "        if (mem != null) {\n" +
+                "            return;\n" +
+                "        }\n" +
+                statements +
+                "    }",
+        )
+    val selectBody = "    public boolean select() {\n"
+    count = text.split(selectBody).size - 1
+    check(count == 1) { "lazy: select() not found" }
+    text = text.replace(selectBody, selectBody + "        lazyInit();\n")
+    val processBody = "    public void process(APDU apdu) {\n"
+    count = text.split(processBody).size - 1
+    check(count == 1) { "lazy: process() not found" }
+    text = text.replace(processBody, processBody + "        lazyInit();\n")
+    wa.writeText(text)
+}
 
 /**
  * The same deterministic-CAP rewrite as `:applet:cap` (architecture.md §7): fixed entry times and
@@ -275,10 +337,38 @@ val probeCap by tasks.registering {
     }
 }
 
+val lazyCap by tasks.registering {
+    group = "build"
+    description =
+        "Builds qntx-card-lazy.cap: the wallet applet with deferred construction" +
+        " (a test build for card A's small install journal, never released)."
+    val appletSources =
+        project(":applet").layout.projectDirectory.dir("src/main/java")
+    val staged = layout.buildDirectory.dir("lazy-src")
+    inputs.files(antJavaCard).withPropertyName("antJavaCard")
+    inputs.dir(appletSources).withPropertyName("appletSources")
+    inputs.dir(jcKitDir).withPropertyName("jckit")
+    outputs.file(lazyCapFile)
+    doLast {
+        val dir = staged.get().asFile
+        dir.deleteRecursively()
+        appletSources.asFile.copyRecursively(dir)
+        applyLazyPatch(File(dir, "org/qntx/card/WalletApplet.java"))
+        javacardCap(
+            dir,
+            "F0716E747800",
+            "org.qntx.card",
+            "org.qntx.card.WalletApplet",
+            "F0716E74780101",
+            lazyCapFile.get().asFile,
+        )
+    }
+}
+
 val memProbeCap by tasks.registering {
     group = "build"
     description =
-        "Builds qntx-card-memprobe.cap: the production applet plus MemProbe instrumentation" +
+        "Builds qntx-card-memprobe.cap: the lazy test build plus MemProbe instrumentation" +
         " (a test build, never released)."
     val appletSources =
         project(":applet").layout.projectDirectory.dir("src/main/java")
@@ -290,11 +380,13 @@ val memProbeCap by tasks.registering {
     inputs.dir(probeSources).withPropertyName("probeSources")
     inputs.dir(jcKitDir).withPropertyName("jckit")
     outputs.file(memCapFile)
-    dependsOn(":applet:cap")
+    dependsOn(":applet:cap", lazyCap)
     doLast {
         val dir = staged.get().asFile
         dir.deleteRecursively()
         appletSources.asFile.copyRecursively(dir)
+        // the lazy patch first: the memprobe build shares the deferred construction
+        applyLazyPatch(File(dir, "org/qntx/card/WalletApplet.java"))
         var commits = 0
         dir.walkTopDown().filter { it.extension == "java" }.forEach { f ->
             var text = f.readText()
@@ -304,6 +396,29 @@ val memProbeCap by tasks.registering {
             if (count > 0) {
                 text = text.replace(marker, "MemProbe.commit();")
                 commits += count
+            }
+            if (f.name == "Session.java") {
+                // bisect markers: which open() call throws on card A
+                val stages =
+                    linkedMapOf(
+                        "        secp.randomScalar(w, W_X);" to 1,
+                        "        secp.mul(w, W_X, Secp256k1.G, (short) 0, buf, (short) 0);" to 2,
+                        "            secp.mul(w, W_X, p, P_HOST, w, W_ZPT);" to 3,
+                        "        identity.identity(w, W_A);" to 4,
+                        "        mem.sha256.reset();" to 5,
+                        "        identity.signHash(w, W_TH, buf, Const.POINT_LEN);" to 6,
+                        "        Kdf.kdf(" to 7,
+                        "        kce.setKey(w, (short) (W_KEYS + 0));" to 8,
+                        "        kcm.setKey(w, (short) (W_KEYS + 16));" to 9,
+                        "        kre.setKey(w, (short) (W_KEYS + 32));" to 10,
+                        "        krm.setKey(w, (short) (W_KEYS + 48));" to 11,
+                        "        state.cert(" to 12,
+                    )
+                for ((marker, n) in stages) {
+                    count = text.split(marker).size - 1
+                    check(count == 1) { "memprobe: stage marker not found: $marker" }
+                    text = text.replace(marker, "        MemProbe.stage((short) $n);\n" + marker)
+                }
             }
             if (f.name == "WalletApplet.java") {
                 // (b) per-command log reset and the 0xFE report command
@@ -328,7 +443,7 @@ val memProbeCap by tasks.registering {
                             "                break;\n" +
                             outerDefault,
                     )
-                // (c) the install window
+                // (c) the real install window: trivial on the lazy build, kept for the report
                 val ctor = "        new WalletApplet(bArray, bOffset);"
                 count = text.split(ctor).size - 1
                 check(count == 1) { "memprobe: install body not found in WalletApplet.java" }
@@ -339,16 +454,33 @@ val memProbeCap by tasks.registering {
                             ctor + "\n" +
                             "        MemProbe.installEnd();",
                     )
+                // (d) 6F00 bisect: record the caught exception's type and reason
+                val catchAll =
+                    "            // §16.3 item 4: unexpected exceptions map to 6F00, reason codes never escape\n"
+                count = text.split(catchAll).size - 1
+                check(count == 1) { "memprobe: process catch-all not found" }
+                text = text.replace(catchAll, catchAll + "            MemProbe.fault(e);\n")
+                // (e) the deferred-construction window of the lazy build
+                val guard = "        if (mem != null) {\n            return;\n        }\n"
+                count = text.split(guard).size - 1
+                check(count == 1) { "memprobe: lazyInit guard not found" }
+                text = text.replace(guard, guard + "        MemProbe.lazyStart();\n")
+                val lastInit =
+                    "        wallet = new Wallet(mem, state, session, identity, derivation);\n"
+                count = text.split(lastInit).size - 1
+                check(count == 1) { "memprobe: lazyInit tail not found" }
+                text = text.replace(lastInit, lastInit + "        MemProbe.lazyEnd();\n")
             }
             f.writeText(text)
         }
         check(commits == 7) { "memprobe: expected 7 commitTransaction sites, found $commits" }
         probeSources.asFile.copyRecursively(dir)
-        // a test-only instrumentation class must never reach the production CAP
-        val prod = cap.get().asFile
-        check(prod.isFile) { "production CAP missing at $prod" }
-        check(!prod.readBytes().let { String(it, Charsets.ISO_8859_1).contains("MemProbe") }) {
-            "production CAP at $prod contains a MemProbe reference"
+        // a test-only instrumentation class must never reach the release builds
+        for (cap in listOf(cap.get().asFile, lazyCapFile.get().asFile)) {
+            check(cap.isFile) { "CAP missing at $cap" }
+            check(!cap.readBytes().let { String(it, Charsets.ISO_8859_1).contains("MemProbe") }) {
+                "CAP at $cap contains a MemProbe reference"
+            }
         }
         javacardCap(
             dir,
@@ -372,12 +504,19 @@ val realCardTask =
         useJUnitPlatform()
         testClassesDirs = realCard.output.classesDirs
         classpath = realCard.runtimeClasspath
-        dependsOn(":applet:cap", probeCap, memProbeCap)
+        dependsOn(":applet:cap", probeCap, memProbeCap, lazyCap)
         // a hardware suite is never up to date
         outputs.upToDateWhen { false }
         systemProperty("qntx.reader", providers.gradleProperty("realCard").orElse("").get())
         systemProperty("qntx.gp", providers.gradleProperty("realCardGp").orElse("").get())
         systemProperty("qntx.cap", cap.get().asFile.absolutePath)
+        systemProperty("qntx.lazycap", lazyCapFile.get().asFile.absolutePath)
+        // which build the wallet suites run: "production" (default) or the lazy test build
+        // (-PrealCardWallet=lazy, needed on card A whose install journal is too small)
+        systemProperty(
+            "qntx.wallet",
+            providers.gradleProperty("realCardWallet").orElse("production").get(),
+        )
         systemProperty("qntx.memcap", memCapFile.get().asFile.absolutePath)
         systemProperty("qntx.probecap", probeCapFile.get().asFile.absolutePath)
         systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
