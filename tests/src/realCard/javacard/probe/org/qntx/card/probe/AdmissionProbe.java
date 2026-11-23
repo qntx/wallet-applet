@@ -53,6 +53,25 @@ import javacardx.crypto.Cipher;
  * 21   7    —                                   W-triple old‖inside‖after of pair2 (195) tx abort
  * 30   n    —                                   random(n)  n ≤ 240, ALG_KEYGENERATION
  * 40   —                                        mem(12)    getAvailableMemory, 3 types
+ * 60   prim P2 = r: run primitive P1 r times (r = 0 runs only the dispatch, the
+ *             baseline for per-op cost = (t(r) − t(0)) / r). P1 and its data:
+ *             01 AES-CBC init with IV (key(16)‖iv(16)); 02 AES-CBC init without IV
+ *             (key(16)); 03/04 AES-CBC doFinal 16 B / 240 B (key(16)); 05 CMAC-128
+ *             init (key(16)); 06 CMAC update 242 B + sign (key(16)); 07 SHA-512
+ *             update 236 B; 08 SHA-512 doFinal 128 B; 09 SHA-256 doFinal 32 B;
+ *             0A RSA-512 NOPAD init + doFinal of a 64-byte input
+ *             (modulus(64)‖exponent‖input(64) — the ModArith.square shape:
+ *             exponent 2); 0B setS on the
+ *             TRANSIENT_DESELECT EC key (S(32), needs the domain of INS 10 slot 4);
+ *             0C PLAIN_XY generateSecret secp256k1 (P(65), key slot 0);
+ *             0D/0E PACE_GM secp256k1 / Wei25519 (P(65), key slots 0/1);
+ *             0F signPreComputedHash secp256k1 (hash(32), key slot 0);
+ *             10 verifyPreComputedHash secp256k1 (hash(32)‖sig(DER), public
+ *             slot 3); 11 persistent ECPublicKey.setW (W(65), public slot 2);
+ *             12/13 full secp256k1 / Wei25519 setDomain on the TRANSIENT_DESELECT
+ *             key (domain(195), the §8.5 SELECT reload cost); 14 nextBytes 32 B;
+ *             15 Util.arrayFillNonAtomic 256 B transient; 16 a 256-iteration byte
+ *             compare loop like Bytes.equal.
  * </pre>
  *
  * <p>Key slots: RSA private 0–1 ({@code TYPE_RSA_PRIVATE}/{@code LENGTH_RSA_512}); EC slots 0–1
@@ -83,6 +102,7 @@ public final class AdmissionProbe extends Applet {
     private static final byte INS_RNG = 0x30;
     private static final byte INS_MEM = 0x40;
     private static final byte INS_CAPSCAN = 0x50;
+    private static final byte INS_PRIM = 0x60;
 
     private final RSAPrivateKey[] rsa;
     private final ECPrivateKey[] ecPriv;
@@ -98,6 +118,14 @@ public final class AdmissionProbe extends Applet {
     private final RandomData random;
     private final short[] mem;
     private final byte[] txOut;
+    // INS 0x60 primitive profile: transient keys/scratch and the engines the wallet uses
+    private final AESKey primAes;
+    private final Cipher primCipher;
+    private final Signature primCmac;
+    private final MessageDigest primSha256;
+    private final MessageDigest primSha512;
+    private final byte[] primBuf;
+    private final byte[] primBuf2;
     // lazy capability-scan slots: the engines/keys Mem allocates that install() does not
     private AESKey capAes;
     private RSAPrivateKey capRsa;
@@ -144,6 +172,18 @@ public final class AdmissionProbe extends Applet {
         random = RandomData.getInstance(RandomData.ALG_KEYGENERATION);
         mem = new short[6];
         txOut = JCSystem.makeTransientByteArray((short) 195, JCSystem.CLEAR_ON_DESELECT);
+        primAes =
+                (AESKey)
+                        KeyBuilder.buildKey(
+                                KeyBuilder.TYPE_AES_TRANSIENT_DESELECT,
+                                KeyBuilder.LENGTH_AES_128,
+                                false);
+        primCipher = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
+        primCmac = Signature.getInstance(Signature.ALG_AES_CMAC_128, false);
+        primSha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        primSha512 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
+        primBuf = JCSystem.makeTransientByteArray((short) 256, JCSystem.CLEAR_ON_DESELECT);
+        primBuf2 = JCSystem.makeTransientByteArray((short) 256, JCSystem.CLEAR_ON_DESELECT);
         register();
     }
 
@@ -262,6 +302,8 @@ public final class AdmissionProbe extends Applet {
                 return 12;
             case INS_CAPSCAN:
                 return capScan(p1, buf, lc);
+            case INS_PRIM:
+                return prim(p1, buf[ISO7816.OFFSET_P2], buf, lc);
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
                 return 0;
@@ -390,6 +432,187 @@ public final class AdmissionProbe extends Applet {
             case 14:
                 // reading back a persistent EC public point (OPEN does this for the identity)
                 return ecPub[0].getW(buf, (short) 0);
+            default:
+                ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
+        }
+        return 0;
+    }
+
+    /**
+     * INS 0x60 primitive profile: {@code P1} selects the primitive, {@code P2} the loop count — a
+     * count of 0 stops after the dispatch so the host can subtract it as the baseline. Every object
+     * is the one {@link #AdmissionProbe()} allocated; the engine state (init, key load) is set up
+     * once before the loop so the per-op cost is the primitive alone.
+     */
+    private short prim(byte p1, byte p2, byte[] buf, short lc) {
+        short r = (short) (p2 & 0xFF);
+        if (p1 <= 0 || p1 > 0x16) {
+            ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
+        }
+        if (r == 0) {
+            return 0;
+        }
+        short i;
+        switch (p1) {
+            case 0x01:
+                require(lc, (short) 32);
+                primAes.setKey(buf, ISO7816.OFFSET_CDATA);
+                for (i = 0; i < r; i++) {
+                    primCipher.init(
+                            primAes,
+                            Cipher.MODE_ENCRYPT,
+                            buf,
+                            (short) (ISO7816.OFFSET_CDATA + 16),
+                            (short) 16);
+                }
+                break;
+            case 0x02:
+                require(lc, (short) 16);
+                primAes.setKey(buf, ISO7816.OFFSET_CDATA);
+                for (i = 0; i < r; i++) {
+                    primCipher.init(primAes, Cipher.MODE_ENCRYPT);
+                }
+                break;
+            case 0x03:
+            case 0x04:
+                require(lc, (short) 16);
+                primAes.setKey(buf, ISO7816.OFFSET_CDATA);
+                primCipher.init(primAes, Cipher.MODE_ENCRYPT);
+                short n = p1 == (byte) 0x03 ? (short) 16 : (short) 240;
+                for (i = 0; i < r; i++) {
+                    primCipher.doFinal(primBuf, (short) 0, n, primBuf, (short) 0);
+                }
+                break;
+            case 0x05:
+                require(lc, (short) 16);
+                primAes.setKey(buf, ISO7816.OFFSET_CDATA);
+                for (i = 0; i < r; i++) {
+                    primCmac.init(primAes, Signature.MODE_SIGN);
+                }
+                break;
+            case 0x06:
+                require(lc, (short) 16);
+                primAes.setKey(buf, ISO7816.OFFSET_CDATA);
+                primCmac.init(primAes, Signature.MODE_SIGN);
+                for (i = 0; i < r; i++) {
+                    primCmac.update(primBuf, (short) 0, (short) 242);
+                    primCmac.sign(primBuf, (short) 0, (short) 0, primBuf2, (short) 0);
+                }
+                break;
+            case 0x07:
+                primSha512.reset();
+                for (i = 0; i < r; i++) {
+                    primSha512.update(primBuf, (short) 0, (short) 236);
+                }
+                break;
+            case 0x08:
+                for (i = 0; i < r; i++) {
+                    primSha512.doFinal(primBuf, (short) 0, (short) 128, primBuf, (short) 128);
+                }
+                break;
+            case 0x09:
+                for (i = 0; i < r; i++) {
+                    primSha256.doFinal(primBuf, (short) 0, (short) 32, primBuf, (short) 32);
+                }
+                break;
+            case 0x0A:
+                // modulus(64) ‖ exponent ‖ input(64): the exponent rides in the middle
+                if (lc < (short) 129) {
+                    ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+                }
+                rsa[0].setModulus(buf, ISO7816.OFFSET_CDATA, (short) 64);
+                rsa[0].setExponent(
+                        buf, (short) (ISO7816.OFFSET_CDATA + 64), (short) (lc - 64 - 64));
+                Util.arrayCopyNonAtomic(
+                        buf,
+                        (short) (ISO7816.OFFSET_CDATA + lc - 64),
+                        primBuf,
+                        (short) 0,
+                        (short) 64);
+                for (i = 0; i < r; i++) {
+                    rsaCipher.init(rsa[0], Cipher.MODE_DECRYPT);
+                    rsaCipher.doFinal(primBuf, (short) 0, (short) 64, primBuf, (short) 0);
+                }
+                break;
+            case 0x0B:
+                // the transient key must already carry a domain (INS 0x10 slot 4)
+                require(lc, (short) 32);
+                for (i = 0; i < r; i++) {
+                    ecPrivTransient.setS(buf, ISO7816.OFFSET_CDATA, (short) 32);
+                }
+                break;
+            case 0x0C:
+                require(lc, (short) 65);
+                plainXy.init(ecPriv[0]);
+                for (i = 0; i < r; i++) {
+                    plainXy.generateSecret(
+                            buf, ISO7816.OFFSET_CDATA, (short) 65, primBuf, (short) 0);
+                }
+                break;
+            case 0x0D:
+            case 0x0E:
+                require(lc, (short) 65);
+                paceGm.init(p1 == (byte) 0x0D ? ecPriv[0] : ecPriv[1]);
+                for (i = 0; i < r; i++) {
+                    paceGm.generateSecret(
+                            buf, ISO7816.OFFSET_CDATA, (short) 65, primBuf, (short) 0);
+                }
+                break;
+            case 0x0F:
+                require(lc, (short) 32);
+                for (i = 0; i < r; i++) {
+                    ecdsa.init(ecPriv[0], Signature.MODE_SIGN);
+                    ecdsa.signPreComputedHash(
+                            buf, ISO7816.OFFSET_CDATA, (short) 32, primBuf, (short) 0);
+                }
+                break;
+            case 0x10:
+                if (lc < (short) 35) {
+                    ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+                }
+                for (i = 0; i < r; i++) {
+                    ecdsa.init(ecPub[1], Signature.MODE_VERIFY);
+                    ecdsa.verifyPreComputedHash(
+                            buf,
+                            ISO7816.OFFSET_CDATA,
+                            (short) 32,
+                            buf,
+                            (short) (ISO7816.OFFSET_CDATA + 32),
+                            (short) (lc - 32));
+                }
+                break;
+            case 0x11:
+                require(lc, (short) 65);
+                for (i = 0; i < r; i++) {
+                    ecPub[0].setW(buf, ISO7816.OFFSET_CDATA, (short) 65);
+                }
+                break;
+            case 0x12:
+            case 0x13:
+                require(lc, (short) 195);
+                for (i = 0; i < r; i++) {
+                    setDomain(ecPrivTransient, buf, ISO7816.OFFSET_CDATA);
+                }
+                break;
+            case 0x14:
+                for (i = 0; i < r; i++) {
+                    random.nextBytes(primBuf, (short) 0, (short) 32);
+                }
+                break;
+            case 0x15:
+                for (i = 0; i < r; i++) {
+                    Util.arrayFillNonAtomic(primBuf, (short) 0, (short) 256, (byte) i);
+                }
+                break;
+            case 0x16:
+                for (i = 0; i < r; i++) {
+                    byte acc = 0;
+                    for (short j = 0; j < (short) 256; j++) {
+                        acc |= (byte) (primBuf[j] ^ primBuf2[j]);
+                    }
+                    primBuf2[0] = acc; // keep the result observable
+                }
+                break;
             default:
                 ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
         }

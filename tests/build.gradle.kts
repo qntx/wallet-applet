@@ -21,6 +21,9 @@ val realCard: SourceSet by sourceSets.creating {
     java.srcDir("src/realCard/java")
 }
 
+// the probe applet also compiles on the JVM: the simulator exercises INS 0x60 (§10)
+sourceSets["test"].java.srcDir("src/realCard/javacard/probe")
+
 dependencies {
     agent(project(path = ":sim", configuration = "agent"))
     antJavaCard(libs.ant.javacard)

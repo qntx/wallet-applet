@@ -163,7 +163,8 @@ development card before the first install.
 
 Every run leaves its evidence under `$realCardOut`: `apdu.log`, `gp-*.log`, `cplc.bin` and the
 per-row `*.json`/`*.bin` reports (`init.json`, `install-journal.json`, `commit-capacity.json`,
-`rng.json`, `memory.json`, `timing.json`/`timing.md`, `signatures.json`), which feed the batch
+`rng.json`, `memory.json`, `timing.json`/`timing.md`, `signatures.json`,
+`primitives.json`/`primitives.md`), which feed the batch
 record of §10.
 
 No hardware has been run in this repository yet: the suite exists, compiles and lists every

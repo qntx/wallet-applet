@@ -44,7 +44,7 @@ final class AdmissionRealCardTest {
     private static final SecureRandom RND = Vecs.RND;
 
     /** secp256k1, P ‖ A ‖ B ‖ G ‖ R ‖ K for the probe's EC_DOMAIN command. */
-    private static byte[] secpDomain() {
+    static byte[] secpDomain() {
         byte[] d = new byte[195];
         byte[] p = Vecs.unhex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
         byte[] b = new byte[32];
@@ -63,7 +63,7 @@ final class AdmissionRealCardTest {
     }
 
     /** Wei25519 (§10.4) in the same layout; parameters from derivation.json. */
-    private static byte[] weiDomain() {
+    static byte[] weiDomain() {
         Map<String, Object> w = Vecs.obj(Vecs.load("derivation.json"), "wei25519");
         byte[] d = new byte[195];
         System.arraycopy(Vecs.hex(w, "q"), 0, d, 0, 32);
