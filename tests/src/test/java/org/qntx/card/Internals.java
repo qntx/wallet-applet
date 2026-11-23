@@ -159,6 +159,11 @@ public final class Internals {
         return (javacard.security.ECPrivateKey) get(secp(applet), "ephKey");
     }
 
+    /** The transient Wei25519 scalar slot of {@link Wei25519#mulBase}. */
+    public static javacard.security.ECPrivateKey scalarKey(Applet applet) {
+        return (javacard.security.ECPrivateKey) get(wei(applet), "scalarKey");
+    }
+
     /** The identity public key of {@link Identity}, for direct verify calls. */
     public static javacard.security.ECPublicKey idPublic(Applet applet) {
         return (javacard.security.ECPublicKey) get(identity(applet), "idPublic");

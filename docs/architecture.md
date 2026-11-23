@@ -108,7 +108,8 @@ APDU buffer.
 A transient coded flag that reads `0x0000` is the platform-cleared state — no session, not
 verified, no pending state (a failed `SELECT FILE` also clears `CLEAR_ON_DESELECT` without
 calling `select()`); `0x0000` is the only accepted value outside the code set and selects the
-safe branch rather than `6F00` (audit-impl F-19).
+safe branch rather than `6F00` (audit-impl F-19). The transient EC curve domains die with the
+selection epoch regardless; `select()` re-loads them (§5.5).
 
 A `PACE_GM`/`PLAIN_XY` `CryptoException` on an infinite result during BIP-32 child computation
 maps to `6A80` (invalid child, §10.3), not `6F00` (audit-impl F-13). The `6F00` mapping is
@@ -269,6 +270,10 @@ the implementation so that the result cannot affect the wire.
   4 as two modular halvings). Every operand is reduced below `m` in constant time before
   `doFinal` (`a + b` conditional subtraction of `m`, `a − b + m`): card A rejects inputs ≥ `m`
   (audit-impl F-14).
+- A transient EC key holds its domain parameters only for the selection epoch: deselection or
+  reset clears value and domain (card A, `probe-transient-reselect`), so `select()` re-loads
+  both domains every time — `setS` on a domainless key throws `CryptoException`
+  `ILLEGAL_VALUE` (§8 patch 13).
 
 ## 6. Countermeasure placement
 
@@ -372,6 +377,12 @@ deviation table:
     output of applet engines since arming (a fault inside the platform signing computation).
 12. Key generation seeds: each `SecureRandomNullProvider` (behind `genKeyPair`) is seeded with 8
     bytes of OS randomness, so simulated cards have distinct identity and link keys.
+13. Transient EC domains: `Memory.buildKey` registers every transient EC private key the applet
+    builds, and `CardRuntime` clears them — value and domain — on applet deselection (the
+    `TRANSIENT_DESELECT` keys) and on card reset (both transient kinds), matching card A
+    (audit-impl `probe-transient-reselect`); `ECPrivateKeyImpl.setS` on a key without domain
+    parameters throws `CryptoException` `ILLEGAL_VALUE`. The wallet applet re-loads both domains
+    in `select()` (§5.5).
 
 Server: `org.qntx.card.sim.Server` listens on TCP, one port per simulated card, framing as
 vsmartcard vpcd (2-byte big-endian length, then the payload): length ≥ 4 is an APDU; length 1 is
@@ -464,6 +475,9 @@ behaviour is UNVERIFIED.
   `card-sim.jar`, `vectors.zip`, `tools` distribution, CycloneDX SBOM, `SHA256SUMS`; build
   provenance via `actions/attest-build-provenance`; release notes list the protocol version and
   the CAP hash. Permissions: `contents: write`, `id-token: write`, `attestations: write`.
+- Before any tag, the real-card gate of §10 — install the production CAP on card A, then `OPEN`
+  across three select epochs and a power cycle (`InstallRealCardTest`) — MUST have passed on the
+  tagged commit; CI cannot run it, so the result is recorded in the release notes.
 
 ## 13. Repository `AGENTS.md`
 

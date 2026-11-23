@@ -18,6 +18,8 @@ import javacard.security.KeyPair;
 public final class WalletApplet extends Applet {
     private final Mem mem;
     private final State state;
+    private final Secp256k1 secp;
+    private final Wei25519 wei;
     private final Identity identity;
     private final Session session;
     private final Derivation derivation;
@@ -32,8 +34,8 @@ public final class WalletApplet extends Applet {
         mem = new Mem();
         state = new State();
         ModArith modArith = new ModArith(mem);
-        Secp256k1 secp = new Secp256k1(mem, modArith);
-        Wei25519 wei = new Wei25519(mem);
+        secp = new Secp256k1(mem, modArith);
+        wei = new Wei25519(mem);
         identity = new Identity(mem, state, secp);
         session = new Session(mem, state, secp, identity);
         derivation = new Derivation(mem, session, secp, wei, modArith);
@@ -64,6 +66,12 @@ public final class WalletApplet extends Applet {
     /** SELECT of the wallet applet tears down any session (§6, §8.5); it writes nothing. */
     public boolean select() {
         session.teardown();
+        // a transient EC key's domain parameters die with the selection epoch like the
+        // transient arrays (§8.5), so they are re-loaded on every selection before any
+        // signing path can run; the writes land on transient objects only, keeping
+        // select() free of persistent writes
+        secp.loadEphDomain();
+        wei.loadDomain();
         return true;
     }
 

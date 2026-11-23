@@ -81,6 +81,15 @@ final class Wei25519 {
                                 KeyBuilder.TYPE_EC_FP_PRIVATE_TRANSIENT_DESELECT,
                                 KeyBuilder.LENGTH_EC_FP_256,
                                 false);
+    }
+
+    /**
+     * Loads the Wei25519 domain and {@code K = 1} into the transient scalar key. A {@code
+     * CLEAR_ON_DESELECT} EC key's domain parameters die with the selection epoch (§8.5), so {@link
+     * WalletApplet#select()} calls this on every selection before any Ed25519 path can run; the
+     * writes land on the transient object only, nothing persistent.
+     */
+    void loadDomain() {
         scalarKey.setFieldFP(Q, (short) 0, (short) Q.length);
         scalarKey.setA(A, (short) 0, (short) A.length);
         scalarKey.setB(B, (short) 0, (short) B.length);

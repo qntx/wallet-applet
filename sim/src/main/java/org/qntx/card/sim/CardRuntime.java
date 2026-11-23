@@ -99,6 +99,41 @@ public final class CardRuntime extends SimulatorRuntime {
         currentAID = null;
     }
 
+    /**
+     * Transient EC keys created through {@link Memory#buildKey}, split by clearing event (patch
+     * 13): jcardsim clears transient arrays on deselection but leaves key objects alone, while on
+     * card A a {@code TRANSIENT_DESELECT} EC key loses its domain parameters — not only its value —
+     * when its applet is deselected, and a {@code TRANSIENT_RESET} key loses them on reset
+     * (audit-impl probe-transient-reselect). The lists hold at most a handful of install-time keys;
+     * clearing is idempotent, so running it on every deselection boundary is enough.
+     */
+    private final List<Key> deselectEcKeys = new ArrayList<>();
+
+    private final List<Key> resetEcKeys = new ArrayList<>();
+
+    /** Registers a transient EC private key under its clearing event; other types are ignored. */
+    void trackTransientEc(byte keyType, Key key) {
+        if (keyType == KeyBuilder.TYPE_EC_FP_PRIVATE_TRANSIENT_DESELECT) {
+            deselectEcKeys.add(key);
+        } else if (keyType == KeyBuilder.TYPE_EC_FP_PRIVATE_TRANSIENT_RESET) {
+            resetEcKeys.add(key);
+        }
+    }
+
+    /**
+     * Patch 13: after the platform's own deselection work, clear every {@code TRANSIENT_DESELECT}
+     * EC key — value and domain — the way card A clears them. A cleared key refuses {@code setS}
+     * with {@code CryptoException.ILLEGAL_VALUE} until its domain is loaded again, which the wallet
+     * applet does in {@code select()}.
+     */
+    @Override
+    protected void deselect(ApplicationInstance applicationInstance) {
+        super.deselect(applicationInstance);
+        for (Key key : deselectEcKeys) {
+            key.clearKey();
+        }
+    }
+
     void startCommand() {
         writes = 0;
         commits.clear();
@@ -393,6 +428,12 @@ public final class CardRuntime extends SimulatorRuntime {
     @Override
     public void reset() {
         super.reset();
+        for (Key key : deselectEcKeys) {
+            key.clearKey();
+        }
+        for (Key key : resetEcKeys) {
+            key.clearKey();
+        }
         journal.clear();
         spans.clear();
         keySnapshots.clear();

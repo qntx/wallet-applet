@@ -135,7 +135,8 @@ command is timed by the real-card suite.
    exception for an input point that is not on the curve, has a coordinate `≥ p`, or is compressed.
 4. `signPreComputedHash` and `verifyPreComputedHash` accept a 32-byte hash.
 5. 256-bit EC keys, persistent and `TRANSIENT_DESELECT`, accept the secp256k1 domain parameters and
-   the Wei25519 parameters of §10.4.
+   the Wei25519 parameters of §10.4. The domain parameters of a `TRANSIENT_DESELECT` key need not
+   survive a deselection or a reset (they do not on the baseline chip).
 6. `RandomData.ALG_KEYGENERATION` passes the statistical tests of `docs/architecture.md` §10, and its
    first 32-byte outputs after 100 consecutive power-ups are pairwise distinct.
 7. `setKey`, `setS`, `setW`, `setExponent` and `genKeyPair` on persistent key objects participate in
@@ -405,7 +406,10 @@ counter exhaustion; any inner `6F00` (after its response record is sent); card r
 the field. Teardown wipes, in this order: the `verified` flag, the decrypted seed, the
 derivation caches, the Ed25519 stream, the pending export and import states, the `waited` count,
 the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory, and the applet wipes them explicitly
-in `select()` and in `OPEN` without relying on deselection.
+in `select()` and in `OPEN` without relying on deselection. The domain parameters of a transient
+EC key object are cleared together with its value (on the development card on every deselection,
+including a re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`,
+before any use.
 
 ## 9. Command reference
 
@@ -1110,7 +1114,10 @@ check points. The identity key is never multiplied by any point. Wallet keys are
 
 ### 16.6 Memory and time
 
-All session state is `CLEAR_ON_DESELECT`. On the baseline chip every command MUST complete within
+All session state is `CLEAR_ON_DESELECT`. The domain parameters of a transient EC key object are
+cleared together with its value (on the development card on every deselection, including a
+re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`, before any
+use (§8.5). On the baseline chip every command MUST complete within
 1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Card times computed
 from unit costs measured on the development card: `OPEN` 160 ms; `VERIFY` 124 ms; `WAIT` 965 ms;
 `CREATE` 106 ms; `SIGN_ECDSA` 411 ms (cold, depth 5); `SIGN_BIP340` 724 ms (cold); `SIGN_ED25519`
