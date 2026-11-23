@@ -41,6 +41,15 @@ final class Ecdsa {
                                     KeyBuilder.TYPE_EC_FP_PUBLIC,
                                     KeyBuilder.LENGTH_EC_FP_256,
                                     false);
+        }
+    }
+
+    /**
+     * Initialisation step 2 (§4.3): the secp256k1 domain into the four self-verification keys.
+     * Idempotent — a torn step simply reloads the parameters.
+     */
+    void initDomains() {
+        for (short i = 0; i < 4; i++) {
             Secp256k1.setDomain(verifyKeys[i]);
         }
     }

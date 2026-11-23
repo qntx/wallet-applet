@@ -34,11 +34,17 @@ final class SimReader implements Reader {
         card.install(org.qntx.card.realcard.Probe.AID2, Probe2.class);
     }
 
-    /** The §14.3 personalisation of the test card: cert under ca1, then life moves to BLANK. */
+    /** The §14.3 personalisation of the test card: init drive, cert under ca1, life → BLANK. */
     private void personalize() {
-        byte[] r = card.transmit(Apdu.select(Apdu.WALLET_AID));
-        expectOk(r, "SELECT wallet");
-        byte[] rapdu = card.transmit(GET_IDENTITY);
+        // §14.3: repeat SELECT + GET_IDENTITY until it stops answering 6283, at most 16 times
+        byte[] rapdu = null;
+        for (int i = 0; i < 16; i++) {
+            expectOk(card.transmit(Apdu.select(Apdu.WALLET_AID)), "SELECT wallet");
+            rapdu = card.transmit(GET_IDENTITY);
+            if (Apdu.sw(rapdu) != 0x6283) {
+                break;
+            }
+        }
         expectOk(rapdu, "GET_IDENTITY");
         byte[] a = Arrays.copyOf(rapdu, rapdu.length - 2);
         byte[] cert = Certificates.issue(TestCa.PRIVATE, a);

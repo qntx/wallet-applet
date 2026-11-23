@@ -121,6 +121,11 @@ public final class Card {
         return runtime.lastCommitBytes();
     }
 
+    /** Commit-buffer bytes the last {@link #install} charged against the install journal. */
+    public int installBytes() {
+        return runtime.installUsed();
+    }
+
     /** Per-transaction commit-buffer consumption of the last command. */
     public List<Integer> commits() {
         return runtime.commits();

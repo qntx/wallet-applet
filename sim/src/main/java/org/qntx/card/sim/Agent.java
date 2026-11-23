@@ -114,7 +114,11 @@ public final class Agent {
                                 ClassFile.ClassHierarchyResolverOption.of(resolver));
                 return cf.transformClass(
                         cf.parse(classfileBuffer),
+                        // <clinit> stays unwoven: the constants it fills are CAP-loaded
+                        // bytes, not runtime persistent writes — charging them would fake
+                        // the install journal (architecture §8 patch 2)
                         ClassTransform.transformingMethodBodies(
+                                m -> !"<clinit>".equals(m.methodName().stringValue()),
                                 CodeTransform.ofStateful(() -> new HookTransform(packages))));
             } catch (RuntimeException e) {
                 throw new IllegalStateException("sim agent failed to transform " + className, e);

@@ -11,7 +11,6 @@ import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.qntx.card.WalletApplet;
 import org.qntx.card.host.Certificates;
 import org.qntx.card.host.Crypto;
 import org.qntx.card.host.Open;
@@ -30,9 +29,7 @@ final class SmokeTest {
 
     @BeforeEach
     void install() {
-        card = new Card();
-        card.install(Spec.WALLET_AID, WalletApplet.class);
-        card.transmit(Spec.SELECT);
+        card = Vecs.factory();
     }
 
     @Test

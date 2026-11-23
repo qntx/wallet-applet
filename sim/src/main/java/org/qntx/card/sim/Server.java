@@ -122,8 +122,16 @@ public final class Server {
                     isd.registerApp(WALLET_AID);
                     card.install(NDEF_AID, NdefApplet.class, NDEF_MESSAGE);
                     isd.registerApp(NDEF_AID);
-                    expectOk(isd.transmit(SELECT_WALLET), "SELECT");
-                    byte[] rapdu = isd.transmit(GET_IDENTITY);
+                    // §14.3: drive bounded initialisation — SELECT + GET_IDENTITY until it stops
+                    // answering 6283, at most 16 repetitions
+                    byte[] rapdu = null;
+                    for (int i = 0; i < 16; i++) {
+                        expectOk(isd.transmit(SELECT_WALLET), "SELECT");
+                        rapdu = isd.transmit(GET_IDENTITY);
+                        if (sw(rapdu) != 0x6283) {
+                            break;
+                        }
+                    }
                     expectOk(rapdu, "GET_IDENTITY");
                     byte[] a = Arrays.copyOf(rapdu, rapdu.length - 2);
                     if (state == State.FACTORY) {
@@ -141,10 +149,14 @@ public final class Server {
                 });
     }
 
+    private static int sw(byte[] rapdu) {
+        return rapdu.length < 2
+                ? -1
+                : (rapdu[rapdu.length - 2] & 0xFF) << 8 | rapdu[rapdu.length - 1] & 0xFF;
+    }
+
     private static void expectOk(byte[] rapdu, String what) {
-        if (rapdu.length < 2
-                || ((rapdu[rapdu.length - 2] & 0xFF) << 8 | rapdu[rapdu.length - 1] & 0xFF)
-                        != 0x9000) {
+        if (sw(rapdu) != 0x9000) {
             throw new IllegalStateException(what + " failed during card setup");
         }
     }

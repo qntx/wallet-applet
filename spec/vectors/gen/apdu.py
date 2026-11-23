@@ -128,7 +128,8 @@ SYMBOLS = {
 
 # Setup of each life/session combination named by the cases.
 STATES = {
-    "FACTORY": "a freshly installed card",
+    "UNINIT": "a freshly installed card before any GET_IDENTITY: initialisation has not started (§4.3)",
+    "FACTORY": "a freshly installed card after GET_IDENTITY was repeated until it returned 9000 (initialisation complete, §4.3)",
     "BLANK": "FACTORY, then PERSONALIZE with {cert} and {caKey}",
     "LOADED": "BLANK, then OPEN and CREATE P1 = 01 with {accessHash} ‖ {seed} (no other members), then a new OPEN",
     "session none": "no OPEN after the setup",
@@ -189,8 +190,8 @@ DEPTH_ELEVEN = "0b" + "80000000" * 11
 ORDER_N = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
 MAX_32 = "ff" * 32
 
-# life values: FACTORY, BLANK, LOADED (§4.1), "any", or the transfer setups SOURCE, TARGET and
-# TARGET-LOADED (§9.12–9.14, see STATES).
+# life values: UNINIT (§4.3), FACTORY, BLANK, LOADED (§4.1), "any" (one of FACTORY, BLANK,
+# LOADED), or the transfer setups SOURCE, TARGET and TARGET-LOADED (§9.12–9.14, see STATES).
 # session: "none", "open", "verified", "streaming", "offered", "importing" or "exporting".
 COMMANDS = [
     {
@@ -199,6 +200,23 @@ COMMANDS = [
         "cases": [
             case("wrong-cla", "any", "none", apdu("00e00000", le="00"), False, "6e00"),
             case("unknown-ins", "any", "none", apdu("807f0000", le="00"), False, "6d00"),
+        ],
+    },
+    {
+        "name": "INIT",
+        "section": "4.3",
+        "cases": [
+            # CLA is checked before the initialisation gate
+            case("wrong-cla", "UNINIT", "none", apdu("00e00000", le="00"), False, "6e00"),
+            # GET_IDENTITY performs the first step; steps remain
+            case("get-identity-step", "UNINIT", "none", apdu("80e00000", le="00"), False, "6283"),
+            # the gate precedes GET_IDENTITY's own checks: a step runs here too
+            case("get-identity-p1p2-step", "UNINIT", "none", apdu("80e00100", "00"), False, "6283"),
+            case("personalize", "UNINIT", "none", apdu("80e20000", "{cert}", "{caKey}"), False, "6283"),
+            case("open", "UNINIT", "none", apdu("80100000", "{hostEph}", le="00"), False, "6283"),
+            case("session", "UNINIT", "none", apdu("80120000", "00" * 32, le="00"), False, "6283"),
+            # the gate precedes the INS check
+            case("unknown-ins", "UNINIT", "none", apdu("807f0000", le="00"), False, "6283"),
         ],
     },
     {

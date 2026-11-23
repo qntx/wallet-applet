@@ -30,7 +30,7 @@ import javacardx.crypto.Cipher;
  * Admission 8. Test-only: every command is a measurement and this package never ships in a release
  * artifact.
  *
- * <p>Replica write sets (one persistent {@code byte[272]} at the architecture §4.2 offsets plus
+ * <p>Replica write sets (one persistent {@code byte[274]} at the architecture §4.2 offsets plus
  * key-object writes on the same object types as production — {@code AESKey}, persistent secp256k1
  * {@code ECPrivateKey}/{@code ECPublicKey} and {@code KeyPair}), derived from protocol §4.3 and
  * {@code State}, {@code Wallet}, {@code Transfer}, {@code Identity}:
@@ -51,7 +51,7 @@ import javacardx.crypto.Cipher;
  */
 public class Probe extends Applet {
     private static final short DOM_LEN = 195;
-    private static final short STATE_LEN = 272;
+    private static final short STATE_LEN = 274;
     private static final short OFF_LIFE = 0;
     private static final short OFF_FAILS = 2;
     private static final short OFF_ORIGIN = 6;

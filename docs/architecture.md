@@ -51,7 +51,7 @@ tests (§14); later stages may extend a class only as their acceptance tables st
 
 | Class | Responsibility | Spec | Stage |
 | --- | --- | --- | --- |
-| `WalletApplet` | `install`, `select`, `process`; outer dispatch; inner dispatch with the checking order, pending-state ending and `6F00` mapping of `protocol.md` §9.2 | §6, §9.1, §9.2 | scaffold |
+| `WalletApplet` | `install` (allocation only), `select`, `process`; outer dispatch incl. the bounded initialisation gate of §4.3; inner dispatch with the checking order, pending-state ending and `6F00` mapping of `protocol.md` §9.2 | §4.3, §6, §9.1, §9.2 | scaffold |
 | `Const` | Status words, INS codes, labels, coded constants (§6), sizes | §13 | core |
 | `Mem` | Allocates every transient array and shared engine once; scratch ownership rules (§5.2) | §16.3 | core |
 | `Bytes` | Constant-time compare, wipe, `u16`/`u32` codecs, M2 pad/unpad | §1, §16.4 | core |
@@ -76,6 +76,9 @@ tests (§14); later stages may extend a class only as their acceptance tables st
 process(apdu)
 ├─ selectingApplet()                → Session.teardown(); 9000                 (select() also tears down)
 ├─ CLA ≠ 0x80                       → 6E00
+├─ init ≠ INIT_DONE (coded, read    → INS GET_IDENTITY: run exactly one §4.3 step, then 6283
+│    twice like life)                     while steps remain; every other INS → 6283;
+│                                         a non-member or disagreeing init → 6F00
 ├─ INS 0xE0 GET_IDENTITY            → Identity
 ├─ INS 0xE2 PERSONALIZE             → Identity            (T-PERSO)
 ├─ INS 0x10 OPEN                    → Session.open
@@ -111,19 +114,25 @@ calling `select()`); `0x0000` is the only accepted value outside the code set an
 safe branch rather than `6F00` (audit-impl F-19). The transient EC curve domains die with the
 selection epoch regardless; `select()` re-loads them (§5.5).
 
+The constructor writes nothing: it allocates the whole object graph (keys, engines, arrays —
+"no allocation after install" holds) and calls `register`. Every persistent write the old
+constructor did is a §4.3 initialisation step now — card A journals `install()` and the old
+writes overflowed its 5,120 B journal (`install-diag/NOTES.txt`).
+
 A `PACE_GM`/`PLAIN_XY` `CryptoException` on an infinite result during BIP-32 child computation
 maps to `6A80` (invalid child, §10.3), not `6F00` (audit-impl F-13). The `6F00` mapping is
 otherwise unchanged.
 
 ## 4. Persistent state
 
-Every field of `protocol.md` §4.2 that is not a key object lives in one persistent `byte[272]`
-array `state`, allocated by `State` in the constructor:
+Every field of `protocol.md` §4.2 that is not a key object lives in one persistent `byte[274]`
+array `state`, allocated by `State` in the constructor (the constructor writes nothing — the
+zero-filled array reads `init = 0`, the first initialisation step):
 
 | Offset | Length | Field | Representation | Owner |
 | --- | --- | --- | --- | --- |
 | 0 | 2 | `life` | coded `short` | `Wallet` (`Identity` writes `BLANK` in T-PERSO) |
-| 2 | 4 | `fails` | `f ‖ ~f`; `fails ← 0` writes `0000 FFFF` (also in the constructor) | `Wallet` |
+| 2 | 4 | `fails` | `f ‖ ~f`; `fails ← 0` writes `0000 FFFF` (also at initialisation) | `Wallet` |
 | 6 | 2 | `origin` | coded `short` | `Wallet` |
 | 8 | 2 | `offer` | coded `short` | `Transfer` |
 | 10 | 4 | `edCounter` | `u32` | `Ed25519` |
@@ -132,6 +141,7 @@ array `state`, allocated by `State` in the constructor:
 | 95 | 64 | `ct` | | `Wallet` |
 | 159 | 16 | `tag` | | `Wallet` |
 | 175 | 97 | `cert` | | `Identity` |
+| 272 | 2 | `init` | coded `short`: next initialisation step `0 … 6`, then `INIT_DONE = 0x9966` | `WalletApplet` (the step dispatcher) |
 
 Key objects:
 
@@ -150,8 +160,22 @@ each transaction is charged two array pages: with card A's page-granular commit 
 per array page and per `setKey`/`setS`, 1,024 B per `setW`/`genKeyPair`, audit-impl F-12) the
 worst case is T-PERSO, T-CREATE, T-INSTALL, T-ERASE and T-OFFER at 2,048 B (40 %), T-CHANGE
 at 1,536 B, T-FAIL, T-OK and T-EDCTR at 1,024 B (measured by `CommitCapacityTest`). There is no
-`clearKey` anywhere (§16.1). The constructor generates `idKey` and an initial `linkKey`
-(`genKeyPair`) and sets `fails ← 0`, `offer = NONE`, `life = FACTORY`. Each transaction of `protocol.md` §4.3 is one method
+`clearKey` anywhere (§16.1). Initialisation (`protocol.md` §4.3) runs in `N = 7` steps, each a
+method on the class that owns the objects, dispatched by `WalletApplet` on `init`; `init`
+advances by one atomic `Util.setShort` only after the step completed, and `INIT_DONE` is written
+last (`INIT_DONE` is an RM(1,4) codeword whose Hamming distance to every step index is ≥ 5):
+
+| `init` | Step | Owner |
+| --- | --- | --- |
+| 0 | secp256k1 domain on `idKey` (both halves) and `caKey` | `Identity.initDomains` |
+| 1 | secp256k1 domain on `linkKey` and both peer slots; peer `setW(G)` | `Transfer.initDomains` |
+| 2 | secp256k1 domain on the four verify keys | `Ecdsa.initDomains` |
+| 3 | RSA moduli and exponents | `ModArith.initKeys` |
+| 4 | `idKey.genKeyPair()` | `Identity.initKeys` |
+| 5 | `linkKey.genKeyPair()` | `Transfer.initLink` |
+| 6 | random `wrapKey`; `fails ← 0`; `offer = NONE`; `life = FACTORY` | `Wallet.initState` |
+
+Each transaction of `protocol.md` §4.3 is one method
 that begins, writes and commits, with no other persistent write inside or outside it.
 
 ## 5. Memory
@@ -164,7 +188,7 @@ estimate where nothing measures it.
 | Class | Transient (`CLEAR_ON_DESELECT`) | Persistent (objects and arrays) |
 | --- | --- | --- |
 | `Session` | 4 AES transient keys 128; counter, `verified`, `waited`, stream/export/import state words 10 → **138** | key headers 160 |
-| `State` | — | `state` 272 (§4) |
+| `State` | — | `state` 274 (§4) |
 | `Wallet` | session seed 64; wrap keys `K_enc`, `K_mac` 2 × 32 (in `Mem`) → **128** | `wrapKey` 72 |
 | `Derivation` | secp256k1 cache 170 (parent key uncompressed); ed25519 cache 105; working node 101; HMAC pad 192 → **568** | — |
 | `ModArith` | scratch: 2 × 64 RSA in/out, 4 × 32 operands → **256** | 4 RSA-512 private keys `(ℓ,2)`, `(n,2)`, `(p,2)`, `(p,(p+1)/4)` → **736** |
@@ -220,6 +244,7 @@ one HMAC per input (B2: warm cache, 222 ms per segwit input, 535 ms per taproot 
 | `CHANGE`, `PERSONALIZE` | one transaction each |
 | `OFFER` | one transaction (T-OFFER) only when `offer = NONE`; nothing while the offer is valid |
 | `OPEN`, `STATUS`, `PUBLIC_KEY`, `SIGN_BIP340`, update/finish | none |
+| `GET_IDENTITY` on an uninitialised card | one §4.3 step's writes, once per card per step — outside any transaction, so a torn step is repeated whole (the writes above the tear are done again) |
 
 The session ephemeral is generated by `x·G` into the transient private key, never by
 `genKeyPair` on persistent objects (RP §2.7, §4.1). Endurance is 200k–500k cycles per cell
@@ -291,6 +316,7 @@ Coded constants (RM(1,4) codewords, pairwise Hamming distance ≥ 8, generated a
 
 | Countermeasure (`protocol.md`) | Where |
 | --- | --- |
+| `init` gate: the coded value is read once; `INIT_DONE` re-read for agreement, a step index re-checked on the `GET_IDENTITY` path (`INIT_DONE` there → `6F00`); a non-member value → `6F00` (§16.2.1) | `WalletApplet.dispatch` |
 | Lifecycle check with coded value, evaluated twice for `PERSONALIZE`, `CREATE`, `OFFER`, `IMPORT`, `ERASE`; any non-member value → `6F00` (§16.2.1) | `WalletApplet.inner` step 3; `Identity`, `Wallet`, `Transfer` before every T-* transaction |
 | `verified` check at dispatch and again before output (§16.2.4) | `WalletApplet.inner` step 6; `Derivation.publicKey`, `Ecdsa`, `Bip340`, `Ed25519.begin` (before T-EDCTR), `Ed25519.finish` (before `le32(S)`; `update` has no effect beyond hashing, the dispatch gate only), `Wallet.change`, `Wallet.erase` (before T-ERASE), `Transfer.export1` immediately before writing the response. In `Ecdsa`/`Bip340` the self-verification `setW` on a verify key precedes the second-level check: under a single fault that forced the dispatch gate in an unverified session the card may write one public, stateless verify key — absent faults no unverified write happens (§16.1 item 7) |
 | `fails` read twice independently into `f_a`, `f_b` (two separate reads of the persistent array, each with its complement check); the `f ≥ L` re-entry erase evaluated once on each (coded) at `VERIFY` step 2 | `Wallet.verify` |
@@ -348,6 +374,16 @@ deviation table:
    test suite asserts every named transaction ≤ 2,560 B (`protocol.md` §3 item 8).
    `beginTransaction` with a transaction open throws `TransactionException` `IN_PROGRESS`.
    A persistent-write counter per command is exposed to the tests.
+   The same charging applies to the install phase: `Phase.INSTALL` writes (array spans, key
+   setters, `setW`/`genKeyPair`) count against the same 5,120 B — card A's install journal —
+   and install throws `TransactionException` `BUFFER_FULL` beyond it; nothing is journaled for
+   rollback (a failed install is discarded whole). The charge is exposed as
+   `Card.installBytes()`; `InstallJournalTest` asserts both applets ≤ 3,072 B and that a
+   test-only applet replaying the pre-F1 constructor fails with `BUFFER_FULL`. Allocations
+   (`buildKey`, `new`, `makeTransient*`, `getInstance`) charge the single constant
+   `INSTALL_ALLOC_CHARGE`, 0 until the card handoff measures whether JCOP charges allocations.
+   `<clinit>` is not woven (patch 5's agent skips it): the constants it fills are CAP-loaded
+   bytes, not runtime persistent writes.
 3. Auto-abort: when `process` returns with a transaction still open, the runtime aborts it and
    the response returns `6F00`; data already sent stays delivered (card A behaviour, JCRE 3.2
    §7.6.2).
@@ -427,7 +463,7 @@ Run on each silicon batch and before the protocol freeze; results recorded in th
 | Admission 5 | Wei25519 and secp256k1 domains accepted by 256-bit keys and transient keys |
 | Admission 6 | RandomData: NIST SP 800-22 subset on 10 MB from `ALG_KEYGENERATION` with the Rev. 1a §4.2 decision rule — 80 sequences of 10⁶ bits; per statistic at least 77 of 80 with p ≥ 0.01 (§4.2.1) and uniformity P-value_T ≥ 0.0001 (§4.2.2); statistics frequency, block frequency (M = 128), runs, longest run (M = 10⁴), cumulative sums; the first 32-byte output after each of 100 power-ups is pairwise distinct |
 | Admission 7 | Persistent key objects `setKey`/`setS`/`setW`/`setExponent`/`genKeyPair` participate in transactions (abort restores the previous value) |
-| Admission 8 | Every named transaction consumes ≤ 50 % of `getMaxCommitCapacity` — the wallet applet cannot report `getUnusedCommitCapacity` inside its own transactions, so the admission probe (test-only CAP `F0716E7478FF`) replays each named transaction's write set, one `byte[272]` at the §4 offsets plus the key-object setters of the same types, and reports `max − unused` before the commit; `getAvailableMemory(CLEAR_ON_DESELECT)` after install ≥ 15 % of the pool |
+| Admission 8 | Every named transaction consumes ≤ 50 % of `getMaxCommitCapacity` — the wallet applet cannot report `getUnusedCommitCapacity` inside its own transactions, so the admission probe (test-only CAP `F0716E7478FF`) replays each named transaction's write set, one `byte[274]` at the §4 offsets plus the key-object setters of the same types, and reports `max − unused` before the commit; `getAvailableMemory(CLEAR_ON_DESELECT)` after install ≥ 15 % of the pool |
 | Admission 9 | One `WAIT` unit takes 0.9–1.1 s on a contactless reader (median of 9; card A predicted 965 ms from the measured 2.370 ms per iteration) |
 | Timing | Every command of `protocol.md` §16.6 on a contact and an NFC reader; assert ≤ 1,500 ms; record vs B2 |
 | APDU | `Lc = 248` receive test (the `setIncomingAndReceive` + `receiveBytes` loop of §3) |
@@ -445,12 +481,15 @@ development card exists.
 `tools` builds `qntx-card` (picocli):
 
 - `install` — load and install the CAP over SCP02 (`i = 55`) or SCP03 as recorded for the batch
-  at admission (GlobalPlatformPro library), check the load-file hash against the release, and
+  at admission (GlobalPlatformPro library), check the load-file hash against the release,
   compare the registry with the admission baseline plus exactly the load file and the two
-  instances (`protocol.md` §14.3 steps 2, 3, 6).
-- `personalise` — `GET_IDENTITY`, obtain the certificate from the HSM interface (PKCS#11), send
-  `PERSONALIZE`, verify `OPEN`, perform the step-6 registry check, replace ISD keys with
-  discarded random keys, append the batch record (steps 4–8). It records and prints the short ID
+  instances (`protocol.md` §14.3 steps 2, 3, 7), and drive §4.3 initialisation
+  (`Init.drive`: `SELECT` + `GET_IDENTITY` until not `6283`, bound 16), printing the number of
+  steps and each step's duration.
+- `personalise` — accept an uninitialised card and drive §4.3 initialisation first, then
+  `GET_IDENTITY`, obtain the certificate from the HSM interface (PKCS#11), send
+  `PERSONALIZE`, verify `OPEN`, perform the step-7 registry check, replace ISD keys with
+  discarded random keys, append the batch record (steps 4–10). It records and prints the short ID
   `short(A)` (8 hex) that is printed on the card face. A `--test-ca` mode uses a software test
   CA and refuses production anchors.
 - `registry` — print the registry (one sorted line per entry: kind, AID, lifecycle); admission

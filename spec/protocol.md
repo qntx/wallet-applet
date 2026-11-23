@@ -142,12 +142,14 @@ command is timed by the real-card suite.
 7. `setKey`, `setS`, `setW`, `setExponent` and `genKeyPair` on persistent key objects participate in
    an open transaction (JCRE 3.2 §9.3): an abort or power loss restores the previous key value.
 8. Each named transaction of §4.3, executed on the card, consumes at most 50 % of
-   `getMaxCommitCapacity` (measured with `getUnusedCommitCapacity`; consumption is
-   page-granular).
+   `getMaxCommitCapacity`, and `install` of the wallet applet consumes at most 60 % (measured
+   with `getUnusedCommitCapacity`; consumption is page-granular).
 9. One `WAIT` (§9.15) takes at least 900 ms and at most 1100 ms on a contactless reader. The
    lower bound keeps destruction without the code slow (§7.3); the upper bound keeps `W` units and
    a `VERIFY` within one iOS NFC connection (about 20 s by the limit commonly assumed for iOS;
    Apple does not document it, and it is measured on reference phones before freeze).
+10. The production load file installs (`INSTALL [for install and make selectable]` of the wallet
+    and NDEF applets succeeds).
 
 HMAC-SHA512 is computed in software over `ALG_SHA_512`. Ed25519 is computed through the
 short-Weierstrass curve Wei25519 (§10.4); the card outputs Wei25519 points and the host encodes
@@ -180,6 +182,9 @@ read-back gate (§9.5 step 6); both perform T-ERASE and return `6F00`. There is 
 transition. A re-seal (`IMPORT` into `LOADED`, §9.14) replaces only the access
 code of the same wallet.
 
+Between install and the end of initialisation (§4.3) the applet is *uninitialised* — not a
+`life` value: every command except `SELECT` and `GET_IDENTITY` returns `6283` (§4.3).
+
 ### 4.2 Persistent state
 
 Every persistent change happens inside exactly one of the named transactions of §4.3. "Cleared"
@@ -190,8 +195,8 @@ value ≥ `L`, including those ≥ `0x8000`, counts as `f ≥ L`.
 
 | Field | Content | Size | Written by |
 | --- | --- | --- | --- |
-| `life` | `FACTORY`, `BLANK` or `LOADED` | 2 (coded, §16.2) | install, T-PERSO, T-CREATE, T-INSTALL, T-ERASE |
-| `idKey` | Identity key pair, secp256k1 (private 32, public 65) | key pair | install |
+| `life` | `FACTORY`, `BLANK` or `LOADED` | 2 (coded, §16.2) | initialisation, T-PERSO, T-CREATE, T-INSTALL, T-ERASE |
+| `idKey` | Identity key pair, secp256k1 (private 32, public 65) | key pair | initialisation |
 | `cert` | Certificate (§5.2) | 97 | T-PERSO |
 | `caKey` | CA public key, uncompressed | 65 (key object) | T-PERSO |
 | `edCounter` | Ed25519 nonce counter `N` (§12.3), initially 0 | 4 | T-EDCTR |
@@ -201,9 +206,10 @@ value ≥ `L`, including those ≥ `0x8000`, counts as `f ≥ L`.
 | `fp` | Seed fingerprint `SHA-256("qntx-card/v1/fingerprint" ‖ seed)` (§10.1) | 32 | T-CREATE, T-INSTALL, T-ERASE |
 | `origin` | `0x01` generated on a card, `0x02` imported (§9.4) | 2 (coded) | T-CREATE, T-INSTALL, T-ERASE |
 | `members` | Count `c ∈ [1, 3]` and card IDs `ID₁ … ID_c` | 1 + 48 | T-CREATE, T-INSTALL, T-ERASE |
-| `fails` | Consecutive failed `VERIFY` count `f` and its bitwise complement | 2 + 2 | install, T-FAIL, T-OK, T-CREATE, T-INSTALL, T-ERASE |
-| `linkKey` | Link key pair, secp256k1, public key `LK` (§11) | key pair | install, T-OFFER, T-CREATE, T-INSTALL, T-ERASE |
+| `fails` | Consecutive failed `VERIFY` count `f` and its bitwise complement | 2 + 2 | initialisation, T-FAIL, T-OK, T-CREATE, T-INSTALL, T-ERASE |
+| `linkKey` | Link key pair, secp256k1, public key `LK` (§11) | key pair | initialisation, T-OFFER, T-CREATE, T-INSTALL, T-ERASE |
 | `offer` | `NONE` or `VALID` | 2 (coded) | T-OFFER, T-CREATE, T-INSTALL, T-ERASE |
+| `init` | Next initialisation step or `INIT_DONE` (coded, §16.2) | 2 | install (0), initialisation |
 
 In `BLANK`, `ct`, `tag`, `fp`, `origin` and `members` are cleared, `fails` holds 0 and `wrapKey`
 holds a random key unrelated to any ciphertext. After T-CREATE, T-INSTALL and T-ERASE, `offer = NONE` and
@@ -227,10 +233,16 @@ and nothing else (§3 item 8).
 | T-OFFER | `OFFER` with `offer = NONE` | new `linkKey` (`genKeyPair`); `offer ← VALID` |
 | T-EDCTR | `SIGN_ED25519` (`P1 = 0x00`) | `edCounter ← N` |
 
-The applet constructor (install) allocates every object, generates `idKey` and an initial
-`linkKey`, sets `edCounter = 0`, `fails ← 0`, `offer = NONE`, `life = FACTORY`, and loads the constants of §10.4
-and `docs/architecture.md` §5.5. Commit-buffer consumption is page-granular on the baseline chip; §3
-item 8 bounds it.
+`install` allocates every object and writes nothing else (on the baseline chip `install` runs
+inside one platform transaction whose journal holds 5,120 B; install MUST consume at most 60 % of
+`getMaxCommitCapacity`). Initialisation then loads the domain parameters and RSA moduli of §10
+and `docs/architecture.md` §5.5 into the persistent key objects, generates `idKey` and an initial
+`linkKey`, installs a random `wrapKey`, sets `fails ← 0`, `offer = NONE`, `life = FACTORY`
+(`edCounter` is 0 from allocation) and finally writes `init ← INIT_DONE`. It runs outside any
+transaction in steps, each driven by one `GET_IDENTITY` (§14.1) and each MUST complete within
+500 ms on the baseline chip; every step is idempotent, `init` advances only after a step
+completed, so a torn step is repeated whole. `init` is a coded value read twice like `life`
+(§16.2 item 1). The number of steps is an implementation property, at most 16.
 
 ## 5. Identity and certificates
 
@@ -424,10 +436,11 @@ before any use.
 | `SESSION` | `80 12 00 00 Lc record 00` | open session | 8.3 |
 
 Outer dispatch order: the `SELECT` that selected the applet returns `9000`; otherwise
-`CLA ≠ 0x80` returns `6E00`; an `INS` not in this table returns `6D00`; then the command's own
-checks apply. (Non-normative: a command whose CLA names a logical channel other than 0 is answered
-by the platform, `6881` on the baseline chip, and never reaches the applet, which is not
-multiselectable.)
+`CLA ≠ 0x80` returns `6E00`; while uninitialised (§4.3), `GET_IDENTITY` performs one
+initialisation step and every other `INS` — known or not — returns `6283`; an `INS` not in this
+table returns `6D00`; then the command's own checks apply. (Non-normative: a command whose CLA
+names a logical channel other than 0 is answered by the platform, `6881` on the baseline chip,
+and never reaches the applet, which is not multiselectable.)
 
 ### 9.2 Inner commands
 
@@ -925,6 +938,7 @@ This section and §13.2 cover the wallet applet; the NDEF applet's status words 
 | SW | Meaning |
 | --- | --- |
 | `9000` | Success; for `SESSION` the result is the inner status in the response record |
+| `6283` | Uninitialised (§4.3): repeat `GET_IDENTITY` until it returns another status word |
 | `6700` | Wrong `Lc` |
 | `6982` | Record failure (§8.3 steps 2–5); the session is torn down |
 | `6985` | Wrong `life`, or `SESSION` with no open session |
@@ -954,6 +968,10 @@ This section and §13.2 cover the wallet applet; the NDEF applet's status words 
 
 ### 14.1 GET_IDENTITY (`80 E0 00 00 00`)
 
+While uninitialised (§4.3) GET_IDENTITY performs the next initialisation step and returns `6283`
+while steps remain; the call that completes the last step continues with the checks below and
+returns `A`.
+
 Checks: `life = FACTORY` (else `6985`); `P1 = P2 = 0x00` (else `6A86`); no data (else `6700`).
 Response: `A(33)`.
 
@@ -975,17 +993,19 @@ Every production card MUST be prepared as follows:
    file hash against the reproducible release build.
 3. Install the wallet applet (`F0716E74780101`, no install parameters) and the NDEF applet
    (`D2760000850101`, applet-specific install data = the NDEF message, §15).
-4. `SELECT`, `GET_IDENTITY`; the batch CA signs `"qntx-card/v1/cert" ‖ A` in its HSM.
-5. `PERSONALIZE`; `SELECT`, `OPEN` with a fresh host key; verify the certificate and the session
+4. Repeat `SELECT`, `GET_IDENTITY` until it returns `9000` (initialisation, §4.3); the tool
+   bounds the repetitions at 16 and fails the card otherwise. The last response carries `A`.
+5. The batch CA signs `"qntx-card/v1/cert" ‖ A` in its HSM.
+6. `PERSONALIZE`; `SELECT`, `OPEN` with a fresh host key; verify the certificate and the session
    signature against the batch anchor.
-6. GlobalPlatform `GET STATUS`: the registry MUST equal the batch's factory registry recorded at
+7. GlobalPlatform `GET STATUS`: the registry MUST equal the batch's factory registry recorded at
    admission plus exactly the load file and the two instances above.
-7. Print `short(A)` (§1) on the card face and read it back by the tool's camera or operator check
+8. Print `short(A)` (§1) on the card face and read it back by the tool's camera or operator check
    against `short(A)` computed from the `A` returned by `GET_IDENTITY` in step 4, which MUST equal
-   `cert[0..33)` from the `OPEN` of step 5 (`GET_IDENTITY` is not available after `PERSONALIZE`).
-8. Replace the ISD keys with random keys generated inside the personalisation tool and never
+   `cert[0..33)` from the `OPEN` of step 6 (`GET_IDENTITY` is not available after `PERSONALIZE`).
+9. Replace the ISD keys with random keys generated inside the personalisation tool and never
    stored or output.
-9. Record card ID, short ID, CPLC, certificate and load file hash in the batch record.
+10. Record card ID, short ID, CPLC, certificate and load file hash in the batch record.
 
 The CA private keys live only in an offline HSM under two-person control. Test and production
 CAs are distinct.
@@ -1048,7 +1068,8 @@ belongs to a past transfer or ciphertext (§3 item 7).
 
 ### 16.2 Fault resistance
 
-1. `life`, `origin`, `offer`, the session flags `verified` and session-open, the pending-state
+1. `life`, `origin`, `offer`, `init`, the session flags `verified` and session-open, the
+   pending-state
    flags, and the result of every signature, MAC, certificate and fingerprint verification are
    16-bit values from a code set whose members have pairwise Hamming distance ≥ 8 and differ from
    `0x0000` and `0xFFFF` (`docs/architecture.md` §6). A transient flag that reads `0x0000` is the state
@@ -1117,7 +1138,8 @@ check points. The identity key is never multiplied by any point. Wallet keys are
 All session state is `CLEAR_ON_DESELECT`. The domain parameters of a transient EC key object are
 cleared together with its value (on the development card on every deselection, including a
 re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`, before any
-use (§8.5). On the baseline chip every command MUST complete within
+use (§8.5). Each initialisation step of §4.3 completes within
+500 ms; on the baseline chip every command MUST complete within
 1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Card times computed
 from unit costs measured on the development card: `OPEN` 160 ms; `VERIFY` 124 ms; `WAIT` 965 ms;
 `CREATE` 106 ms; `SIGN_ECDSA` 411 ms (cold, depth 5); `SIGN_BIP340` 724 ms (cold); `SIGN_ED25519`
@@ -1171,6 +1193,6 @@ files give exact bytes.
 | `ecdsa.json` | 12.1 | Keys, digests, signatures for verification; recovery-id and low-`s` cases | noble `secp256k1`; BouncyCastle |
 | `bip340.json` | 12.2 | BIP-340 official vectors; BIP-341/BIP-86 tweak cases; fixed-`aux` exact signatures | BIP-340 reference CSV; BIP-86 vectors; noble `schnorr` |
 | `ed25519.json` | 10.4, 12.3 | RFC 8032 §7.1 vectors (verification); fixed `N`, `Zr`, card ID → exact `r`, `W(R)`, `S`; two card IDs with equal `N` and `Zr` give different `r`; a wrong stream gives an invalid signature | RFC 8032; noble `ed25519`; libsodium |
-| `apdu.json` | 9, 13, 14 | Every command's encoding; for each command every precondition in checking order with its status word | Generated from this document's tables by `spec/vectors/gen/apdu.py` |
+| `apdu.json` | 9, 13, 14 | Every command's encoding; for each command every precondition in checking order with its status word; the `UNINIT` setup and the `INIT` cases of §4.3 | Generated from this document's tables by `spec/vectors/gen/apdu.py` |
 | `verify-sequence.json` | 7.3, 9.3, 9.5, 9.12, 9.14, 9.15 | Command sequences with the expected inner status word and `STATUS` after each step: wrong codes from `f = 0` to `L` (`63C9` … `63C7`, then `6986` until `W` `WAIT`s, `63C6` … `63C1`, `6983`); `waited` lost on a new `OPEN`; `WAIT` beyond `W`; a right code at every `f < L` resets; the `tries = 0` state (power loss after the `L`-th T-FAIL) where the next `VERIFY` returns `6983` without comparing; a re-seal of a `LOADED` card resets `fails`; `OFFER` repeated with a valid offer returns the same `LK`; `IMPORT` `P1 = 0x00` after a committed install returns `6985` | Generated from §9 by `spec/vectors/gen/sequence.py`; replayed by the card suite and by the qntx/wallet protocol client against the simulator |
 | `ndef.json` | 15 | Capability container and NDEF file for sample messages; READ BINARY offsets | NFC Forum T4T 2.0 §5 by hand |

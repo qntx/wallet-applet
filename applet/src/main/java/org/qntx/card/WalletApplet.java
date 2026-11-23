@@ -18,6 +18,7 @@ import javacard.security.KeyPair;
 public final class WalletApplet extends Applet {
     private final Mem mem;
     private final State state;
+    private final ModArith modArith;
     private final Secp256k1 secp;
     private final Wei25519 wei;
     private final Identity identity;
@@ -33,7 +34,7 @@ public final class WalletApplet extends Applet {
         Const.init();
         mem = new Mem();
         state = new State();
-        ModArith modArith = new ModArith(mem);
+        modArith = new ModArith(mem);
         secp = new Secp256k1(mem, modArith);
         wei = new Wei25519(mem);
         identity = new Identity(mem, state, secp);
@@ -104,11 +105,36 @@ public final class WalletApplet extends Applet {
         apdu.setOutgoingAndSend((short) 0, len);
     }
 
-    /** The §9.1 outer table: CLA, reception, then the INS row's own checking order. */
+    /** The §9.1 outer table: CLA, the §4.3 init gate, reception, then the INS row's checks. */
     private short dispatch(APDU apdu) {
         byte[] buf = apdu.getBuffer();
         if (buf[ISO7816.OFFSET_CLA] != Const.CLA) {
             ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
+        }
+        // the initialisation gate of §4.3/§9.1, before reception and the INS switch: a card
+        // whose bounded install steps have not all run answers only GET_IDENTITY, which
+        // performs exactly one step. init is a coded value read twice like life (§16.2
+        // item 1): a step index on the first read and INIT_DONE on the second — or any
+        // non-member value — is a detected fault.
+        short init = state.init();
+        if (init == Const.INIT_DONE) {
+            if (state.init() != Const.INIT_DONE) {
+                ISOException.throwIt(Const.SW_FAULT);
+            }
+        } else {
+            if (init < 0 || init >= Const.INIT_STEPS) {
+                ISOException.throwIt(Const.SW_FAULT);
+            }
+            if (buf[ISO7816.OFFSET_INS] != Const.INS_GET_IDENTITY) {
+                ISOException.throwIt(Const.SW_NOT_INITIALISED);
+            }
+            if (state.init() == Const.INIT_DONE) {
+                ISOException.throwIt(Const.SW_FAULT);
+            }
+            runInitStep(init);
+            if (state.init() != Const.INIT_DONE) {
+                ISOException.throwIt(Const.SW_NOT_INITIALISED);
+            }
         }
         short lc = receiveAll(apdu);
         short len;
@@ -130,6 +156,38 @@ public final class WalletApplet extends Applet {
                 return 0;
         }
         return len;
+    }
+
+    /**
+     * One initialisation step of the §4.3 table — the class owning the objects does the work;
+     * {@code init} advances by one atomic write only after the step completed, so a torn step is
+     * repeated whole (every step is idempotent). Outside any transaction.
+     */
+    private void runInitStep(short i) {
+        switch (i) {
+            case 0:
+                identity.initDomains();
+                break;
+            case 1:
+                transfer.initDomains();
+                break;
+            case 2:
+                ecdsa.initDomains();
+                break;
+            case 3:
+                modArith.initKeys();
+                break;
+            case 4:
+                identity.initKeys();
+                break;
+            case 5:
+                transfer.initLink();
+                break;
+            default:
+                wallet.initState();
+                break;
+        }
+        state.setInit(i == (short) (Const.INIT_STEPS - 1) ? Const.INIT_DONE : (short) (i + 1));
     }
 
     /**

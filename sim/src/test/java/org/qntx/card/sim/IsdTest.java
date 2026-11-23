@@ -92,6 +92,18 @@ class IsdTest {
         return isd;
     }
 
+    /** The §4.3 initialisation drive: SELECT + GET_IDENTITY until not 6283, at most 16 times. */
+    private static byte[] driveInit(Isd isd) throws Exception {
+        for (int i = 0; i < 16; i++) {
+            assertEquals(0x9000, sw(bibo(isd).transceive(SELECT_WALLET)));
+            byte[] rapdu = bibo(isd).transceive(GET_IDENTITY);
+            if (sw(rapdu) != 0x6283) {
+                return rapdu;
+            }
+        }
+        throw new IllegalStateException("initialisation did not finish within 16 steps");
+    }
+
     private static CAPFile cap() throws Exception {
         try (InputStream in = IsdTest.class.getResourceAsStream("/qntx-card.cap")) {
             return CAPFile.fromStream(in);
@@ -186,8 +198,7 @@ class IsdTest {
         assertTrue(appletAids.contains(new pro.javacard.capfile.AID(WALLET)));
         assertTrue(appletAids.contains(new pro.javacard.capfile.AID(NDEF)));
         // the applets are actually installed and selectable
-        assertEquals(0x9000, sw(bibo(isd).transceive(SELECT_WALLET)));
-        assertEquals(33, data(bibo(isd).transceive(GET_IDENTITY)).length);
+        assertEquals(33, data(driveInit(isd)).length);
     }
 
     @Test
@@ -215,8 +226,7 @@ class IsdTest {
         assertTrue(aids.contains(new pro.javacard.capfile.AID(WALLET)));
         assertTrue(aids.contains(new pro.javacard.capfile.AID(NDEF)));
         // the installed applets answer over jcardsim like server-installed ones
-        assertEquals(0x9000, sw(bibo(isd).transceive(SELECT_WALLET)));
-        assertEquals(33, data(bibo(isd).transceive(GET_IDENTITY)).length);
+        assertEquals(33, data(driveInit(isd)).length);
         byte[] selectNdef = concat(hex("00A4040007"), NDEF, new byte[] {0x00});
         assertEquals(0x9000, sw(bibo(isd).transceive(selectNdef)));
     }

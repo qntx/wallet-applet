@@ -72,9 +72,22 @@ public final class CardRuntime extends SimulatorRuntime {
     private final int[] digestBytes = new int[64];
     private final int[] digestResets = new int[64];
 
+    /**
+     * Per-allocation charge of the install journal: card A does not charge allocations, so the
+     * constant stands at 0 until the card handoff measures otherwise (architecture §8 patch 2).
+     */
+    static final int INSTALL_ALLOC_CHARGE = 0;
+
+    /** Commit-buffer bytes charged by the current (or last) install phase. */
+    private int installUsed;
+
     void bind(Phase newPhase) {
         CURRENT.set(this);
         phase = newPhase;
+        if (newPhase == Phase.INSTALL) {
+            installUsed = 0;
+            spans.clear();
+        }
     }
 
     void unbind() {
@@ -182,6 +195,7 @@ public final class CardRuntime extends SimulatorRuntime {
 
     /** Registers an array allocated by instrumented applet bytecode as applet-owned card memory. */
     void registerArray(Object array) {
+        installAlloc();
         appletArrays.add(array);
     }
 
@@ -205,12 +219,20 @@ public final class CardRuntime extends SimulatorRuntime {
         if (transactionDepth != 0) {
             delta = spanDelta(array, offset, offset + length);
             checkCommitCapacity(delta);
+        } else if (phase == Phase.INSTALL) {
+            delta = spanDelta(array, offset, offset + length);
+            checkInstallJournal(delta);
         }
         countWrite();
         if (transactionDepth != 0) {
             applySpan(array, offset, offset + length);
             journalArray(array, offset, length);
             commitUsed += delta;
+        } else if (phase == Phase.INSTALL) {
+            // the install journal charges like an open transaction but journals no pre-image:
+            // a failed install is discarded whole
+            applySpan(array, offset, offset + length);
+            installUsed += delta;
         }
     }
 
@@ -229,11 +251,15 @@ public final class CardRuntime extends SimulatorRuntime {
     void keyWrite(Object key, int charge) {
         if (transactionDepth != 0) {
             checkCommitCapacity(charge);
+        } else if (phase == Phase.INSTALL) {
+            checkInstallJournal(charge);
         }
         countWrite();
         if (transactionDepth != 0) {
             commitUsed += charge;
             snapshotKeyOnce(key);
+        } else if (phase == Phase.INSTALL) {
+            installUsed += charge;
         }
     }
 
@@ -241,6 +267,8 @@ public final class CardRuntime extends SimulatorRuntime {
     void keyPairWrite(Object publicKey, Object privateKey) {
         if (transactionDepth != 0) {
             checkCommitCapacity(KEY_GEN_CHARGE);
+        } else if (phase == Phase.INSTALL) {
+            checkInstallJournal(KEY_GEN_CHARGE);
         }
         countWrite();
         if (transactionDepth != 0) {
@@ -252,6 +280,31 @@ public final class CardRuntime extends SimulatorRuntime {
                     && !Nvm.isTransientKeyType(((Key) privateKey).getType())) {
                 snapshotKeyOnce(privateKey);
             }
+        } else if (phase == Phase.INSTALL) {
+            installUsed += KEY_GEN_CHARGE;
+        }
+    }
+
+    /**
+     * Charge of one applet allocation observed by the agent ({@code new T[]}, {@code buildKey},
+     * {@code makeTransient*}, engine {@code getInstance}) against the install journal — {@link
+     * #INSTALL_ALLOC_CHARGE} until card A's per-allocation cost is measured.
+     */
+    void installAlloc() {
+        if (phase == Phase.INSTALL) {
+            checkInstallJournal(INSTALL_ALLOC_CHARGE);
+            installUsed += INSTALL_ALLOC_CHARGE;
+        }
+    }
+
+    /** Commit-buffer bytes the last install phase charged (like {@link #lastCommitBytes}). */
+    int installUsed() {
+        return installUsed;
+    }
+
+    private void checkInstallJournal(int delta) {
+        if (installUsed + delta > MAX_COMMIT) {
+            TransactionException.throwIt(TransactionException.BUFFER_FULL);
         }
     }
 
@@ -496,6 +549,7 @@ public final class CardRuntime extends SimulatorRuntime {
      * instead of simulating unmeasured memory.
      */
     void chargeTransientKey(byte keyType, short keyLength) {
+        installAlloc();
         switch (keyType) {
             case KeyBuilder.TYPE_EC_FP_PRIVATE_TRANSIENT_DESELECT:
             case KeyBuilder.TYPE_EC_FP_PRIVATE_TRANSIENT_RESET:
@@ -524,6 +578,7 @@ public final class CardRuntime extends SimulatorRuntime {
      * the allocation loudly.
      */
     void chargeEngine(String kind, byte algorithm) {
+        installAlloc();
         int size =
                 switch (kind) {
                     case "cipher" ->

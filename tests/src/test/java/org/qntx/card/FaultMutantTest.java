@@ -594,15 +594,18 @@ final class FaultMutantTest {
 
     @Test
     void installWipesInitialKeyMaterial() {
-        // wrapKey.setKey leaves the random key bytes in W[0..16): the constructor wipes them.
-        // W is read before any command — command processing would zero W again and mask it.
+        // initState's wrapKey.setKey leaves the random key bytes in W[0..16): the command's
+        // wipeScratch zeroes them before the response. W is read right after the drive —
+        // later commands would overwrite W and mask any residue.
         Card c = new Card();
         c.install(Spec.WALLET_AID, WalletApplet.class);
+        c.transmit(Spec.SELECT);
+        Vecs.driveInit(c);
         Applet applet = c.applet(Spec.WALLET_AID);
         assertArrayEquals(new byte[16], Arrays.copyOf(Internals.wBytes(applet), 16));
         byte[] k = new byte[16];
         assertEquals(16, Internals.wrapKey(applet).getKey(k, (short) 0));
-        assertTrue(!Arrays.equals(new byte[16], k), "the install-time wrap key was set");
+        assertTrue(!Arrays.equals(new byte[16], k), "the initialisation wrap key was set");
     }
 
     @Test

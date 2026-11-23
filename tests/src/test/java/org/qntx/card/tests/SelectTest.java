@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.qntx.card.WalletApplet;
 import org.qntx.card.sim.Card;
 
 /** Outer dispatch of protocol.md §6 and §9.1 (architecture.md §14.2 S4). */
@@ -16,8 +15,7 @@ final class SelectTest {
 
     @BeforeEach
     void install() {
-        card = new Card();
-        card.install(Spec.WALLET_AID, WalletApplet.class);
+        card = Vecs.factory();
     }
 
     @Test

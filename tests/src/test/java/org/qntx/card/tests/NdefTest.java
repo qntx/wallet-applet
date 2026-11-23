@@ -320,6 +320,7 @@ final class NdefTest {
         card.install(Spec.WALLET_AID, WalletApplet.class);
         card.install(Spec.NDEF_AID, NdefApplet.class, MSG1);
         card.transmit(Spec.SELECT);
+        Vecs.driveInit(card);
         Vecs.blankFor(card, Vecs.cardA(card));
         Session session = Vecs.open(card);
         assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT_NDEF));

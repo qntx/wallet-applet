@@ -164,13 +164,14 @@ final class ApduTableTest {
         }
     }
 
-    /** The life setup of apdu.json: FACTORY, BLANK, LOADED and the three transfer states. */
+    /** The life setup of apdu.json: UNINIT, FACTORY, BLANK, LOADED and the transfer states. */
     private static Ctx setup(String name, Map<String, Object> c) throws Exception {
         Ctx ctx = new Ctx();
-        ctx.card = Vecs.factory();
-        ctx.a = tryA(ctx.card); // GET_IDENTITY works only in FACTORY, so read it first
         String life = (String) c.get("life");
-        if (!life.equals("any") && !life.equals("FACTORY")) {
+        // UNINIT is install without the §14.3 drive; every other life is initialised
+        ctx.card = life.equals("UNINIT") ? Vecs.installed() : Vecs.factory();
+        ctx.a = tryA(ctx.card); // GET_IDENTITY works only in FACTORY, so read it first
+        if (!life.equals("any") && !life.equals("UNINIT") && !life.equals("FACTORY")) {
             Vecs.blankFor(ctx.card, ctx.a);
         }
         switch (life) {

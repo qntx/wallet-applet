@@ -65,7 +65,8 @@ java -jar card-sim.jar [--cards N] [--port P] [--state empty|factory|blank]
   `--port 0` gives every card an ephemeral port.
 - `--port P`: first TCP port (default 35963, vpcd's port).
 - `--state empty`: no package and no applets — only the issuer security domain (below).
-- `--state factory`: install the wallet and NDEF applets and stop (life `FACTORY`).
+- `--state factory`: install the wallet and NDEF applets, run the §4.3 initialisation and
+  stop (life `FACTORY`).
 - `--state blank` (default): also personalise each card under the `ca1` test CA of
   `spec/vectors/cert.json` (life `BLANK`).
 
@@ -179,10 +180,12 @@ arguments or output: `QNTX_ISD_KEY` (the card's ISD key, hex) for every subcomma
   diff against. An empty card prints exactly `ISD A000000151000000 01`.
 - `install --cap <file> --cap-sha256 <hex> --scp <s> --baseline <file> --ndef <hex>` checks the
   CAP hash before touching the card, loads it and installs both applets (the NDEF message is
-  1–100 bytes, hex), then asserts the registry is baseline + the package and the two
-  applications.
+  1–100 bytes, hex), asserts the registry is baseline + the package and the two
+  applications, then drives the §4.3 initialisation (`SELECT` + `GET_IDENTITY` until not
+  `6283`, bound 16) and prints each step's duration.
 - `personalise --scp <s> --baseline <file> --batch-record <file> --test-ca <file> |
-  --hsm-config <file> --hsm-key <label>` runs §14.3 steps 4–9: CPLC and identity, certificate
+  --hsm-config <file> --hsm-key <label>` runs §14.3 steps 4–10: it accepts an uninitialised
+  card and drives initialisation first, then CPLC and identity, certificate
   issued by the CA (`--test-ca` accepts only the pinned ca1/ca2 test anchors; HSM mode accepts
   only production anchors), the read-back short ID to type, and independent replacement ISD keys.
   Each card appends one JSON line
@@ -207,11 +210,11 @@ qntx-card personalise --sim 127.0.0.1:35963 --scp 03 --baseline baseline.txt \
 
 Measured on this tree (architecture §14.7 R6; the CI build job reports them again):
 
-- **CAP**: `qntx-card.cap` is 129,684 B; the load-file components inside it
-  (`org/qntx/card/javacard/*.cap`) total 26,860 B.
+- **CAP**: `qntx-card.cap` is 132,086 B; the load-file components inside it
+  (`org/qntx/card/javacard/*.cap`) total 27,458 B.
 - **Transient**: the simulator's memory report ends `total 2568 / 3990 (budget 3390)` — 2,568 B
   of the 3,990 B JCAlgTest pool, inside the §5.1 acceptance budget of 3,390 B.
-- **Persistent**: ≈ 6.6 KB of objects and arrays plus the ≈ 26 KB CAP against the 157,524 B
+- **Persistent**: ≈ 6.6 KB of objects and arrays plus the ≈ 27 KB CAP against the 157,524 B
   J3R180 NVM (architecture §5.1). That is the architecture estimate — the simulator accounts
   transient bytes only, so it is not re-measured here.
 - **Card time** (protocol §16.6, computed from unit costs measured on development card A; full

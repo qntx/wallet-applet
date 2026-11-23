@@ -17,7 +17,7 @@ import javacard.security.Signature;
 /**
  * The card's secp256k1 identity (§5.1), its batch CA key and certificate (§5.2) and the
  * personalisation commands GET_IDENTITY (§14.1) and PERSONALIZE (§14.2). {@code idKey} is generated
- * in the constructor and never leaves the card; {@code caKey} is stored by T-PERSO.
+ * during initialisation (§4.3) and never leaves the card; {@code caKey} is stored by T-PERSO.
  */
 final class Identity {
     /** {@link Mem#W} offset of the SHA-256 input hash for sign/verify (below {@link Mem#W_DER}). */
@@ -49,15 +49,26 @@ final class Identity {
                                         KeyBuilder.TYPE_EC_FP_PRIVATE,
                                         KeyBuilder.LENGTH_EC_FP_256,
                                         false));
-        Secp256k1.setDomain((ECKey) idKey.getPublic());
-        Secp256k1.setDomain((ECKey) idKey.getPrivate());
-        idKey.genKeyPair();
         idPublic = (ECPublicKey) idKey.getPublic();
         caKey =
                 (ECPublicKey)
                         KeyBuilder.buildKey(
                                 KeyBuilder.TYPE_EC_FP_PUBLIC, KeyBuilder.LENGTH_EC_FP_256, false);
+    }
+
+    /**
+     * Initialisation step 0 (§4.3): the secp256k1 domain into {@code idKey} (both halves) and
+     * {@code caKey}. Idempotent — a torn step simply reloads the parameters.
+     */
+    void initDomains() {
+        Secp256k1.setDomain((ECKey) idKey.getPublic());
+        Secp256k1.setDomain((ECKey) idKey.getPrivate());
         Secp256k1.setDomain(caKey);
+    }
+
+    /** Initialisation step 4 (§4.3): the identity key pair itself. */
+    void initKeys() {
+        idKey.genKeyPair();
     }
 
     /** Writes {@code A}, the compressed identity public key (33 bytes). */

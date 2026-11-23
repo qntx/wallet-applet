@@ -36,18 +36,17 @@ import picocli.CommandLine.Option;
 import pro.javacard.gp.keys.PlaintextKeys;
 
 /**
- * {@code qntx-card personalise}: protocol.md §14.3 steps 4–9 — identity read, CA-issued
- * certificate, PERSONALIZE, OPEN verification, registry check, operator short-ID check, ISD key
- * replacement and the batch record. The CA is either a test key file or an HSM key (PKCS#11);
- * secrets never leave their store and are never printed.
+ * {@code qntx-card personalise}: protocol.md §14.3 steps 4–10 — initialisation drive and identity
+ * read, CA-issued certificate, PERSONALIZE, OPEN verification, registry check, operator short-ID
+ * check, ISD key replacement and the batch record. The CA is either a test key file or an HSM key
+ * (PKCS#11); secrets never leave their store and are never printed.
  */
-@Command(name = "personalise", description = "Personalise a card end to end (§14.3 steps 4-9).")
+@Command(name = "personalise", description = "Personalise a card end to end (§14.3 steps 4-10).")
 final class PersonaliseCmd implements Callable<Integer> {
 
     private static final byte[] GET_CPLC = {
         (byte) 0x80, (byte) 0xCA, (byte) 0x9F, (byte) 0x7F, 0x00
     };
-    private static final byte[] GET_IDENTITY = {(byte) 0x80, (byte) 0xE0, 0x00, 0x00, 0x00};
 
     /**
      * The KVN the replacement keys are stored under in step 8: one above the factory/test KVN 0x30
@@ -192,8 +191,14 @@ final class PersonaliseCmd implements Callable<Integer> {
             if (Apdu.sw(select) != 0x9000) {
                 return ctx.fail("personalise: SELECT wallet failed: " + Apdu.status(select));
             }
-            byte[] identity = bibo.transceive(GET_IDENTITY);
-            if (Apdu.sw(identity) != 0x9000 || identity.length != 35) {
+            // step 4 accepts an uninitialised card: the §4.3 drive finishes it before A is read
+            byte[] identity;
+            try {
+                identity = Init.drive(bibo, null);
+            } catch (Exception e) {
+                return ctx.fail("personalise: initialisation failed: " + RegistryCmd.message(e));
+            }
+            if (identity.length != 35) {
                 return ctx.fail("personalise: GET_IDENTITY refused: " + Apdu.status(identity));
             }
             byte[] a = Arrays.copyOf(identity, 33);

@@ -25,7 +25,7 @@ must produce identical bytes: `gen/java` (BouncyCastle) and `gen/ts` (noble). Th
 | `ecdsa.json` | 12.1 | noble `secp256k1`; BouncyCastle | `sign` | yes |
 | `bip340.json` | 12.2 | BIP-340 reference CSV; BIP-86 vectors; noble `schnorr` | `sign` | yes |
 | `ed25519.json` | 10.4, 12.3 | RFC 8032; noble `ed25519`; libsodium | `sign` | yes |
-| `apdu.json` | 9, 13, 14 | Generated from the protocol tables by `gen/apdu.py` | `core`, extended by every later stage for its commands | yes |
+| `apdu.json` | 4.3, 9, 13, 14 | Generated from the protocol tables by `gen/apdu.py`; the `UNINIT` setup and `INIT` cases cover §4.3 | `core`, extended by every later stage for its commands | yes |
 | `verify-sequence.json` | 7.3, 9.3, 9.5, 9.12, 9.14, 9.15 | Generated from §9 by `gen/sequence.py`; replayed by the card suite and by the qntx/wallet protocol client | `wallet`, extended by `sets` | yes |
 | `ndef.json` | 15 | NFC Forum T4T 2.0 §5 by hand | `release` | yes |
 
