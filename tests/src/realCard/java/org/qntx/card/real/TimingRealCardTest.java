@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package org.qntx.card.real;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -28,7 +29,8 @@ import org.qntx.card.tests.Vecs;
  *
  * <p>Wear budget: the CREATE/ERASE phase costs 20 CREATE + 20 ERASE persistent cycles per variant
  * as listed — inside the agreed allowance; the VERIFY rounds contribute the expected 40
- * verifications (20 right + 20 wrong-then-right pairs).
+ * verifications (20 right + 20 wrong-then-right pairs) plus ~200 untimed right VERIFYs that wipe
+ * the derivation caches before each cold row.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 final class TimingRealCardTest {
@@ -154,8 +156,18 @@ final class TimingRealCardTest {
                 Math.max(0, 32 - tb.length),
                 Math.min(32, tb.length));
         byte[] bip86wire = Vecs.hex(Vecs.secpTemplate("btc-bip86"), "wire");
+        // encode(A) for the ed25519 stream from the host derivation (§12.3) — never a card
+        // PUBLIC_KEY, which would warm the derivation cache before the cold begin
+        byte[] edLeaf =
+                org.qntx.card.host.Slip10.derive(Vecs.seed(), "m/44'/501'/0'/0'").privateKey();
+        assertArrayEquals(
+                Vecs.pkEdSolana(), org.qntx.card.host.Slip10.wei(edLeaf), "host W(A) == vector");
+        byte[] encodedA =
+                org.qntx.card.host.Wei25519Map.encode(org.qntx.card.host.Slip10.wei(edLeaf));
         // one selection epoch for the whole table: a further SELECT would clear the
-        // CLEAR_ON_DESELECT key domains (defect D2) and every OPEN after it would 6F00
+        // CLEAR_ON_DESELECT key domains (defect D2) and every OPEN after it would 6F00.
+        // every cold row is preceded by an untimed right VERIFY — §9.5 step 1 re-decrypts
+        // the session seed and empties the derivation caches, i.e. the cold state
         for (int i = 0; i < RUNS; i++) {
             Open.Request req = Open.request(Vecs.RND);
             RealCard.Timed t = timedFull(req.apdu());
@@ -166,20 +178,37 @@ final class TimingRealCardTest {
             sample("VERIFY wrong", timedInner(s, 0x22, Vecs.accessHashWrong()));
             sample("VERIFY right", timedInner(s, 0x22, Vecs.accessHash()));
             sample("STATUS", timedInner(s, 0x20, new byte[0]));
+            cold(s);
             publicKey(s, "secp depth3", SECP_D3, 0);
+            cold(s);
             publicKey(s, "secp depth5", SECP_D5, 0);
+            cold(s);
             publicKey(s, "ed25519 depth3", ED_D3, 1);
+            cold(s);
             publicKey(s, "ed25519 depth5", ED_D5, 1);
+            cold(s);
             signEcdsa(s, "depth5");
+            cold(s);
             signBip340(s, "untweaked", new byte[32], bip86wire);
+            cold(s);
             signBip340(s, "tweak", rndTweak, bip86wire);
             for (int size : new int[] {64, 1232, 4032}) {
-                signEd(s, size, "cold");
-                signEd(s, size, "warm");
+                cold(s);
+                signEd(s, size, "cold", encodedA);
+                signEd(s, size, "warm", encodedA);
             }
             sample("WAIT", timedInner(s, 0x25, new byte[0]));
             s.close();
         }
+    }
+
+    /**
+     * An untimed right VERIFY: step 1 of §9.5 re-decrypts the session seed and empties the
+     * derivation caches — the cold state every "cold" row must start from.
+     */
+    private static void cold(Session s) throws Exception {
+        byte[] apdu = s.wrap(0x22, 0, 0, Vecs.accessHash());
+        assertEquals(0x9000, s.unwrap(Fixture.card().transmit(apdu)).sw(), "cold VERIFY");
     }
 
     private static long timedInner(Session s, int ins, byte[] data) throws Exception {
@@ -231,12 +260,10 @@ final class TimingRealCardTest {
         sample("SIGN_BIP340 " + name + " warm", t.nanos());
     }
 
-    private static void signEd(Session s, int size, String phase) throws Exception {
+    private static void signEd(Session s, int size, String phase, byte[] encodedA)
+            throws Exception {
         byte[] message = new byte[size];
         Vecs.RND.nextBytes(message);
-        // PUBLIC_KEY first: any other inner command would end the pending stream (§9.2)
-        Response pk = s.unwrap(Fixture.card().transmit(s.wrap(0x30, 1, 0, Vecs.pathEdSolana())));
-        byte[] encodedA = org.qntx.card.host.Wei25519Map.encode(pk.data());
         long total = 0;
         RealCard.Timed t;
         byte[] apdu = s.wrap(0x33, 0, 0, Vecs.pathEdSolana());

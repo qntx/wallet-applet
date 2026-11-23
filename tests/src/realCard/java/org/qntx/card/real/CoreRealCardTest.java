@@ -323,6 +323,27 @@ final class CoreRealCardTest {
 
     @Test
     @Order(16)
+    void openMustWorkAfterReselect() throws Exception {
+        Fixture.require();
+        // a fresh install's first SELECT opens the epoch; personalize so OPEN can verify
+        Fixture.ensureStrictFactory();
+        Fixture.ensureBlank();
+        RealCard card = Fixture.card();
+        assertEquals(
+                0x9000,
+                RealCard.sw(card.transmit(Open.request(Vecs.RND).apdu())),
+                "OPEN in the install's first selection epoch");
+        card.ok(Spec.SELECT); // the second select deselects the applet first
+        // a host must be able to OPEN again after a reselect — on card A the CLEAR_ON_DESELECT
+        // key domains are gone, so OPEN dies inside secp.mul (defect D2, evidence d2/)
+        assertEquals(
+                0x9000,
+                RealCard.sw(card.transmit(Open.request(Vecs.RND).apdu())),
+                "D2: OPEN after reselect");
+    }
+
+    @Test
+    @Order(17)
     void selectAnswers9000AndNeedsNoData() throws Exception {
         Fixture.require();
         Fixture.ensureInstalled(Fixture.CapKind.PROD);
