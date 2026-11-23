@@ -10,7 +10,7 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /**
- * The Java Card CAP build shared by `:applet:cap` and `:tests:admissionCap` (architecture §7):
+ * The Java Card CAP build shared by `:applet:cap` and the test CAPs (architecture §7):
  * one ant-javacard conversion call with the frozen flags `verify=true`, `debug=false`,
  * `ints=false`, then {@link #normalizeCap} so two builds of the same sources give the same
  * SHA-256.

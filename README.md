@@ -135,35 +135,43 @@ answer `6982`.
 
 ## Real-card suite
 
-`tests/src/realCard` implements the real-card rows of `docs/architecture.md` §10 — admission 1–9
-(`spec/protocol.md` §3) plus Timing, the `Lc = 248` APDU receive test, Flows, Tearing and the
-sacrificial NVM endurance run. It drives a card through a `Reader` transport: PC/SC
-(`javax.smartcardio`) or the in-process simulator, and talks to a test-only admission CAP
-(`tests/src/admission`, package `F0716E7478FF`, applets `…FF01`/`…FF02`, built by
-`:tests:admissionCap` into `tests/build/cap/admission.cap` — never part of a release artifact) and
-to the product wallet.
+`tests/src/realCard` implements the rows of `docs/architecture.md` §10: the nine silicon
+admission items of `spec/protocol.md` §3 plus install/init, timing, the `Lc = 248` APDU
+receive case, protocol cells, session, wallet lifecycle, signing and memory. It drives a card
+through a PC/SC terminal (`javax.smartcardio`), installs the test-only probe CAP
+(`javacard/probe`, package `F0716E7478FF`, → `tests/build/cap/qntx-probe.cap`) and the
+memprobe CAP (`javacard/memprobe`, the production sources plus `MemProbe` applied by
+`memprobe.patch` at build time → `tests/build/cap/qntx-memprobe.cap`) through the `gp`
+wrapper, and deletes the qntx AIDs afterwards. Neither test CAP is a release artifact; a test
+asserts `qntx-card.cap` contains no `MemProbe`.
 
 ```bash
 ./gradlew :tests:realCard                          # no reader: every test reports "not run"
-./gradlew :tests:realCard -PrealCard="ACS ACR"     # PC/SC terminal (name or substring)
-./gradlew :tests:realCard -PrealCard=sim           # simulator self-check, not hardware evidence
+./gradlew :tests:realCard -PrealCardList           # enumerate the suite as skipped
+./gradlew :tests:realCard -PrealCard="ACS ACR"     # PC/SC terminal name
 ```
 
-The suite never runs in CI and is not attached to `check` (`check` still builds the admission CAP
-and the suite classes). Properties: `-PrealCard=<reader>` (required, or `sim`),
-`-PrealCardPeer=<reader>` (second card for EXPORT/IMPORT timing), `-PrealCardContactless=true`
-(WAIT timing when the transport cannot say it is contactless), `-PrealCardTear=<driver>`
-(programmable reader; none is supported yet), `-PrealCardSacrificial=<CPLC IC serial>`
-(destructive NVM row; refuses development card A `D321`/`49917821` unconditionally).
+The suite never runs in CI and is not attached to `check` (`check` still builds both test CAPs
+and the suite classes). Properties: `-PrealCard=<reader>` (required to run),
+`-PrealCard{Cap,MemCap,ProbeCap}=<path>` (prebuilt CAPs; defaults are the in-tree builds,
+sha256 printed), `-Pqntx.gp=<path>` (`gp` wrapper), `-PrealCardOut=<dir>` (evidence,
+default `tests/build/realcard`), `-PrealCardKeep` (keep installed packages),
+`-PrealCardDifferential=<n>` (default 1,000), `-PrealCardRng=<bytes>` (default 1 MiB). The
+flow, tearing and NVM-endurance rows report `unavailable` until their hardware requirements
+exist (see §10); the card identity policy of `REALCARD.md` refuses anything that is not a
+development card before the first install.
 
-Every row appends a JSON line (`row`, `name`, `verdict`, `reader`, `cplc`, `detail`) to
-`tests/build/reports/realcard/results.jsonl`, which feeds the batch record of §10. Rows on the
-simulator are labelled `"reader":"sim"`: timing values are meaningless, contactless and RNG
-quality are not modelled, and rows the simulator cannot express (`genKeyPair` inside a
-transaction, contactless WAIT timing) are skipped with a stated reason rather than passed.
+Every run leaves its evidence under `$realCardOut`: `apdu.log`, `gp-*.log`, `cplc.bin` and the
+per-row `*.json`/`*.bin` reports (`init.json`, `install-journal.json`, `commit-capacity.json`,
+`rng.json`, `memory.json`, `timing.json`/`timing.md`, `signatures.json`), which feed the batch
+record of §10.
 
-No hardware has been run in this repository yet: the suite exists, compiles, lists every §10 test
-and has been self-checked on the simulator only.
+No hardware has been run in this repository yet: the suite exists, compiles and lists every
+test as "not run" without a reader.
+
+### Timings (measured on J3R180 (card A))
+
+Filled from `timing.md` of the first card run; the suite writes the table there.
 
 ## Tools (`qntx-card`)
 

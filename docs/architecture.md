@@ -25,16 +25,15 @@ wallet-applet/
 │   └── src/main/java/org/qntx/card/sim/
 ├── host/                      reference host library written from protocol.md (Java, BouncyCastle)
 │   └── src/main/java/org/qntx/card/host/
-├── tests/                     JUnit 6: unit, simulator command tests, tearing, vectors, fuzz; admission probe; real-card suite
+├── tests/                     JUnit 6: unit, simulator command tests, tearing, vectors, fuzz; real-card suite
 │   ├── src/test/java/
-│   ├── src/admission/java/      test-only admission CAP (AID F0716E7478FF), §10 probes
-│   └── src/realCard/java/
+│   └── src/realCard/            §10 suite: java/ JUnit tests; javacard/ test-only probe and memprobe CAPs
 ├── tools/                     qntx-card CLI: install, personalise, registry, debug shell (picocli, GlobalPlatformPro, apdu4j)
 ├── spec/
 │   ├── protocol.md            normative specification (MIT OR Apache-2.0)
 │   └── vectors/               *.json + gen/java (BouncyCastle) + gen/ts (noble) + gen/apdu.py
 ├── AGENTS.md README.md SECURITY.md CONTRIBUTING.md LICENSE LICENSES/ REUSE.toml
-├── buildSrc/                  the CAP conversion shared by applet/ and the admission CAP
+├── buildSrc/                  the CAP conversion shared by applet/ and the test CAPs
 ├── build.gradle.kts settings.gradle.kts gradle/libs.versions.toml gradle.properties
 └── .github/workflows/{ci.yml,release.yml}
 ```
@@ -381,8 +380,8 @@ deviation table:
    setters, `setW`/`genKeyPair`) count against the same 5,120 B — card A's install journal —
    and install throws `TransactionException` `BUFFER_FULL` beyond it; nothing is journaled for
    rollback (a failed install is discarded whole). The charge is exposed as
-   `Card.installBytes()`; `InstallJournalTest` asserts both applets ≤ 3,072 B and that a
-   test-only applet replaying the pre-F1 constructor fails with `BUFFER_FULL`. Allocations
+   `Card.installBytes()`; the real-card suite records `getAvailableMemory(PERSISTENT)` at
+   install start and end and after §4.3 initialisation (`qntx-install.json`, §10). Allocations
    (`buildKey`, `new`, `makeTransient*`, `getInstance`) charge the single constant
    `INSTALL_ALLOC_CHARGE`, 0 until the card handoff measures whether JCOP charges allocations.
    `<clinit>` is not woven (patch 5's agent skips it): the constants it fills are CAP-loaded
@@ -456,28 +455,51 @@ details), RF behaviour, GlobalPlatform. These are the real-card suite (§10).
 ## 10. Real-card suite and silicon admission
 
 Run on each silicon batch and before the protocol freeze; results recorded in the batch record.
+The suite lives in `tests/src/realCard`: JUnit 6 classes under `java/` and the test-only
+card-side artifacts under `javacard/` — the §3 admission probe (`probe/`, package
+`F0716E7478FF`, applet `F0716E7478FF01`, CAP `tests/build/cap/qntx-probe.cap`) and the memprobe
+(`memprobe/`: `MemProbe.java` plus `memprobe.patch` applied to a copy of the applet sources at
+build time, CAP `tests/build/cap/qntx-memprobe.cap`; the production sources stay untouched and
+the build fails if the patch no longer applies). Neither CAP is part of a release artifact; the
+prebuilt production CAP is checked before install (`-PrealCardCap`, sha256 printed by the task)
+and the suite asserts `qntx-card.cap` never contains `MemProbe`.
 
-| Test | Measures / asserts |
-| --- | --- |
-| Admission 1 | `ALG_RSA_NOPAD` with zero-extended 512-bit moduli and exponents `2` and a 32-byte exponent: results equal BigInteger for 1,000 random inputs per modulus; every input ≥ `m` is rejected |
-| Admission 2 | `ALG_EC_PACE_GM` output is the 65-byte point `s·G' + H` (secp256k1 and Wei25519); an infinite result throws `CryptoException` |
-| Admission 3 | `PLAIN_XY` 65-byte product; rejects off-curve, `x ≥ p` and compressed inputs — rejection is REQUIRED, the protocol relies on it (§3) |
-| Admission 4 | `signPreComputedHash`, `verifyPreComputedHash` on 32-byte hashes |
-| Admission 5 | Wei25519 and secp256k1 domains accepted by 256-bit keys and transient keys |
-| Admission 6 | RandomData: NIST SP 800-22 subset on 10 MB from `ALG_KEYGENERATION` with the Rev. 1a §4.2 decision rule — 80 sequences of 10⁶ bits; per statistic at least 77 of 80 with p ≥ 0.01 (§4.2.1) and uniformity P-value_T ≥ 0.0001 (§4.2.2); statistics frequency, block frequency (M = 128), runs, longest run (M = 10⁴), cumulative sums; the first 32-byte output after each of 100 power-ups is pairwise distinct |
-| Admission 7 | Persistent key objects `setKey`/`setS`/`setW`/`setExponent`/`genKeyPair` participate in transactions (abort restores the previous value) |
-| Admission 8 | Every named transaction consumes ≤ 50 % of `getMaxCommitCapacity` — the wallet applet cannot report `getUnusedCommitCapacity` inside its own transactions, so the admission probe (test-only CAP `F0716E7478FF`) replays each named transaction's write set, one `byte[274]` at the §4 offsets plus the key-object setters of the same types, and reports `max − unused` before the commit; `getAvailableMemory(CLEAR_ON_DESELECT)` after install ≥ 15 % of the pool |
-| Admission 9 | One `WAIT` unit takes 0.9–1.1 s on a contactless reader (median of 9; card A predicted 965 ms from the measured 2.370 ms per iteration) |
-| Timing | Every command of `protocol.md` §16.6 on a contact and an NFC reader; assert ≤ 1,500 ms; record vs B2 |
-| APDU | `Lc = 248` receive test (the `setIncomingAndReceive` + `receiveBytes` loop of §3) |
-| Flows | The flows of B2 on iOS and Android with the wallet harness (taps, seconds); before freeze also: `WAIT` time on each reference phone at the weakest usable coupling, the iOS single-connection limit (15 `WAIT` + `VERIFY` must complete in one connection), the displayable length of the iOS `alertMessage` (`host.md` §3) and native Argon2id time on the slowest supported phone (`$A/spec/FROZEN.md`) |
-| Tearing | Field cut at programmable instants during `VERIFY`, `CREATE`, `IMPORT`, `ERASE` (requires a programmable reader); assert post-states |
-| NVM | Write time of the transactions; endurance after 10⁶ `setW` on one key object, 10⁶ T-FAIL/T-OK and 10⁵ T-OFFER, with all other transactions still committing afterwards (sacrificial card — never development card A; mandatory before freeze) |
+The suite is gated by `-PrealCard=<reader>` (PC/SC terminal name); without a reader every test
+is skipped as "not run" and `-PrealCardList` enumerates the suite as skipped without touching
+hardware. `Fixture` manages one card per run: it installs the CAPs with the `gp` wrapper
+(`-Pqntx.gp`), reuses the wallet across tests to stay inside the wear allowance, and deletes
+the qntx AIDs in `@AfterAll` unless `-PrealCardKeep`. Card identity is checked before any
+install: the ATR, the ISD's CPLC and the JCOP IDENTIFY build string must name a development
+card of `REALCARD.md`, never a production batch.
 
-Admission rows 1–9 are `protocol.md` §3 items 1–9. Audit-impl ran admission 1–5 and 7 on development card A (JCOP4 P71, CPLC IC type `D321`, batch
-`2092`) and they passed (`$A/audit-impl/evidence/card/functional.out`); admission must be
-repeated on each production batch. Multi-card flows are simulation-only while only one
-development card exists.
+| Code under test | Real-card test | Packet / files / assertions |
+| --- | --- | --- |
+| dispatch, §6 SELECT, §7, §8 records | `CoreRealCardTest` | ATR + CPLC + JCOP IDENTIFY vs `REALCARD.md`; wrong CLA `6E00`, unknown INS `6D00`; identity is a stable on-card compressed key across a power cycle; PERSONALIZE gates and `6A80` rejects; OPEN `6985`/`6A86`, record-layer `6982`/`6985`, select and power-cycle teardown, OPEN across selection epochs (D2) |
+| §3 item 1 — `ALG_RSA_NOPAD` | `AdmissionRealCardTest` (`rsaNopadUnder256`) | probe `0x01/0x02/0x03`: 512-bit moduli, exponents 2 and 32-byte; 1,000 random inputs per modulus vs BigInteger; every input ≥ `m` throws |
+| §3 item 2 — `ALG_EC_PACE_GM` | `AdmissionRealCardTest` (`paceGmAndPlainXyOnBothCurves`) | probe `0x13` on secp256k1 and Wei25519: result is the 65-byte `s·G' + H`; an infinite result throws `CryptoException` |
+| §3 item 3 — `PLAIN_XY` | same test | probe `0x14`: off-curve, compressed and `x ≥ p` inputs are rejected — required by §3; valid input gives the 65-byte product |
+| §3 item 4 — `sign/verifyPreComputedHash` | `AdmissionRealCardTest` (`precomputedHashEcdsaSignsAndVerifies`) | probe `0x15/0x16`: card sign → host verify, host sign → card verify, corrupt signature rejected |
+| §3 item 5 — custom domains | `AdmissionRealCardTest` (`ecDomainsAcceptedOnEveryKeyKind`) | probe `0x10`: persistent, TRANSIENT_RESET/DESELECT keys and keypairs take both domains |
+| §3 item 6 — RandomData | `AdmissionRealCardTest` (`rngPassesStatisticsAndDoesNotRepeatAcrossPowerUps`) | probe `0x30`: `-PrealCardRng` bytes (default 1 MiB) through the SP 800-22 subset; the first 32 bytes after each of 100 power-ups are pairwise distinct (`rng.json`, `rng.bin`) |
+| §3 item 7 — keys in transactions | `AdmissionRealCardTest` (`persistentKeySettersJoinAndAbortTransactions`) | probe `0x21`: `setKey`/`setS`/`setW`/`setExponent`/`genKeyPair` abort back to the previous value and commit persistently |
+| §3 item 8 — commit capacity | `AdmissionRealCardTest` (`platformEnginesAndCommitCapacity`), `MemoryRealCardTest` | probe `0x50` capscan reports `getMaxCommitCapacity`/`getUnusedCommitCapacity` (`commit-capacity.json`); memprobe `80 FE` reports `max − unused` before every commit of each named transaction — each ≤ 50 % (`memory.json`) |
+| §3 item 9 — WAIT unit | `TimingRealCardTest` | WAIT median of 20 runs ∈ [0.9, 1.1] s (`timing.json`, `timing.md`) |
+| §14.3 install, §4.3 init, §8.5 epochs | `InstallRealCardTest` | production CAP installs (registry = baseline + load file + instance); `GET_IDENTITY` polls return `6283` until `INIT_DONE` (bound 16, each ≤ 500 ms per §16.6, `init.json`); every other outer command answers `6283`; the memprobe twin reports the install journal charge ≤ 5,120 B (`install-journal.json`); personalise, then `OPEN` ×3 across re-SELECTs and once across a power cycle; `qntx-card.cap` contains no `MemProbe` |
+| §16.6 command timing | `TimingRealCardTest` | every named command, 20 runs, host-clock median/max vs the B2 basis; every command ≤ 1,500 ms (`timing.json`, `timing.md`) |
+| §3 APDU `Lc = 248` | `SignRealCardTest` (`ed25519ChunkBoundaries`) | a 236-byte inner chunk is the largest record that fits `Lc = 248`; maximal updates + empty finish verify |
+| §9.5/§9.6 wallet | `WalletRealCardTest` | lifecycle and the failure-limit story (~110 real WAITs, run once); derivation vectors of `derivation.json` |
+| §12 signing | `SignRealCardTest`, `DifferentialRealCardTest` | every signature verified against vector/host key material (platform RNG forbids vector equality); `qntx.realcard.differential` signatures (default 1,000) written in the noble verify format (`signatures.json`) |
+| memory | `MemoryRealCardTest` | install/init/current pools, per-step §4.3 deltas, DESELECT pool ≥ 15 % free after init (`memory.json`) |
+| flows (B2) | `FlowRealCardTest` | `unavailable` until the phone harness lands — before freeze |
+| tearing | `TearingRealCardTest` | `unavailable` until a programmable reader exists — before freeze |
+| NVM endurance | `NvmRealCardTest` | `unavailable` until a sacrificial card exists — before freeze, never a development card |
+
+Rows 1–9 are the admission items of `protocol.md` §3. Evidence lands under `-PrealCardOut`
+(default `tests/build/realcard/`): the `*.json`/`*.bin` reports above plus `apdu.log`,
+`gp-*.log` and `cplc.bin`, which feed the batch record. Audit-impl ran admission 1–5 and 7 on
+development card A (JCOP4 P71, CPLC IC type `D321`, batch `2092`) and they passed
+(`$A/audit-impl/evidence/card/functional.out`); admission must be repeated on each production
+batch. Multi-card flows are simulation-only while only one development card exists.
 
 ## 11. Tools
 
@@ -663,7 +685,7 @@ same transaction, raising T-CREATE's commit charge from 1,536 B to 2,048 B.
 | R1 | `NdefApplet`: §15 table, every status word; install rejects messages of 0 or > 100 bytes | `NdefTest` |
 | R2 | `card-sim.jar`: TCP framing, multi-card, power and tear control; an end-to-end test drives a 3-card creation and an Ed25519 signature over TCP with the `host` library | `ServerTest` |
 | R3 | `tools`: `install`, `personalise --test-ca`, `shell` work against the simulator and refuse production anchors in test mode | `ToolsTest` |
-| R4 | Real-card suite compiles and lists every test of §10; it is reported as "not run" without hardware | `./gradlew :tests:realCard --dry-run` |
+| R4 | Real-card suite compiles and lists every test of §10; it is reported as "not run" without hardware | `./gradlew :tests:realCard -PrealCardList` |
 | R5 | `release.yml` dry run produces CAP, `card-sim.jar`, `vectors.zip`, SBOM, `SHA256SUMS`, provenance | workflow run on a test tag in a fork |
 | R6 | Final budgets: memory report ≤ §5.1 total; CAP size reported; §16.6 time table reproduced from B2 in the README | build report |
 | R7 | Every vector file of §18 exists and both generators agree | CI `vectors` |
