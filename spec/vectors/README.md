@@ -26,7 +26,7 @@ must produce identical bytes: `gen/java` (BouncyCastle) and `gen/ts` (noble). Th
 | `bip340.json` | 12.2 | BIP-340 reference CSV; BIP-86 vectors; noble `schnorr` | `sign` | yes |
 | `ed25519.json` | 10.4, 12.3 | RFC 8032; noble `ed25519`; libsodium | `sign` | yes |
 | `apdu.json` | 9, 13, 14 | Generated from the protocol tables by `gen/apdu.py` | `core`, extended by every later stage for its commands | yes |
-| `verify-sequence.json` | 7.3, 9.3, 9.5, 9.15 | Generated from §9 by `gen/sequence.py`; the OFFER/IMPORT sequences of §18 land with stage `sets` | `wallet` | yes |
+| `verify-sequence.json` | 7.3, 9.3, 9.5, 9.12, 9.14, 9.15 | Generated from §9 by `gen/sequence.py`; replayed by the card suite and by the qntx/wallet protocol client | `wallet`, extended by `sets` | yes |
 | `ndef.json` | 15 | NFC Forum T4T 2.0 §5 by hand | `release` | yes |
 
 The stage column is the implementation stage of `qntx/wallet-applet` that adds the file to both
@@ -38,6 +38,18 @@ Each file is one JSON document, ASCII, LF line ends, two-space indentation, obje
 the generator writes them, and a final newline — exactly `JSON.stringify(value, null, 2) + "\n"`.
 Values are objects, arrays, booleans, integers within ±(2⁵³ − 1), and strings; byte strings are
 lowercase hexadecimal without prefix.
+
+## `verify-sequence.json` format
+
+The file has `constants` (`L`, `F`, `W`, `I`), named `setups` (`create`, `set`) whose prose
+describes how the card under test reaches a `LOADED`, unverified session, a `tear` blurb for the
+steps that cut the field, and `stepRules` — the replay contract (a step's `status` asks the
+replayer for a `STATUS` in the current session; `repeat n` sends the step n times; `code` names
+the right, wrong or new access hash; `OFFER` `lk` compares the returned `LK`; `EXPORT` runs on
+the member card; `IMPORT0`/`IMPORT1` reference the exports by number). Each sequence has a
+`name`, a `description`, a `setup`, and `steps` of `command`, optional `code`/`export`/`lk`/
+`repeat`/`tear`, `sw` and optional `status`. Commands are `VERIFY`, `WAIT`, `OPEN`, `OFFER`,
+`EXPORT`, `IMPORT0`, `IMPORT1`, `ERASE`.
 
 ## Generating and checking
 

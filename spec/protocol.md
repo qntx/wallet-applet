@@ -184,7 +184,8 @@ code of the same wallet.
 Every persistent change happens inside exactly one of the named transactions of §4.3. "Cleared"
 means set to all zero bytes; key objects are never cleared but overwritten with fresh random
 values inside the transaction (§16.1). `fails` is never cleared: `fails ← 0` writes the value
-`0x0000` and its complement `0xFFFF` (§16.2 item 2).
+`0x0000` and its complement `0xFFFF` (§16.2 item 2). `f` is an unsigned 16-bit value: every
+value ≥ `L`, including those ≥ `0x8000`, counts as `f ≥ L`.
 
 | Field | Content | Size | Written by |
 | --- | --- | --- | --- |
@@ -200,7 +201,7 @@ values inside the transaction (§16.1). `fails` is never cleared: `fails ← 0` 
 | `origin` | `0x01` generated on a card, `0x02` imported (§9.4) | 2 (coded) | T-CREATE, T-INSTALL, T-ERASE |
 | `members` | Count `c ∈ [1, 3]` and card IDs `ID₁ … ID_c` | 1 + 48 | T-CREATE, T-INSTALL, T-ERASE |
 | `fails` | Consecutive failed `VERIFY` count `f` and its bitwise complement | 2 + 2 | install, T-FAIL, T-OK, T-CREATE, T-INSTALL, T-ERASE |
-| `linkKey` | Link key pair, secp256k1, public key `LK` (§11) | key pair | install, T-OFFER, T-CREATE, T-INSTALL |
+| `linkKey` | Link key pair, secp256k1, public key `LK` (§11) | key pair | install, T-OFFER, T-CREATE, T-INSTALL, T-ERASE |
 | `offer` | `NONE` or `VALID` | 2 (coded) | T-OFFER, T-CREATE, T-INSTALL, T-ERASE |
 
 In `BLANK`, `ct`, `tag`, `fp`, `origin` and `members` are cleared, `fails` holds 0 and `wrapKey`
@@ -221,7 +222,7 @@ and nothing else (§3 item 8).
 | T-FAIL | `VERIFY` | `fails ← f + 1` |
 | T-OK | `VERIFY` | `fails ← 0` |
 | T-CHANGE | `CHANGE` | `wrapKey` (fresh random), `ct`, `tag` |
-| T-ERASE | `ERASE`, `VERIFY` | `life ← BLANK`; `wrapKey` ← fresh random; clear `ct`, `tag`, `fp`, `origin`, `members`; `fails ← 0`; `offer ← NONE` |
+| T-ERASE | `ERASE`, `VERIFY` | `life ← BLANK`; `wrapKey` ← fresh random; clear `ct`, `tag`, `fp`, `origin`, `members`; `fails ← 0`; link private key ← fresh random scalar; `offer ← NONE` |
 | T-OFFER | `OFFER` with `offer = NONE` | new `linkKey` (`genKeyPair`); `offer ← VALID` |
 | T-EDCTR | `SIGN_ED25519` (`P1 = 0x00`) | `edCounter ← N` |
 
@@ -617,7 +618,8 @@ RFC 8032 challenge hash; hosts MUST send `encode(R) ‖ encode(A) ‖ M`, where 
 encoding of the returned `W(R)` and `encode(A)` that of `PUBLIC_KEY` for `path` (§10.4). The card
 does not parse the stream; any other stream yields a signature that is invalid under the card's
 key (§12.3). The host forms the signature `encode(R) ‖ le32(S)`. The message has no length limit.
-Algorithm: §12.3.
+Note: chunks above 236 bytes cannot be carried by a command record (§8.3); the card checks the
+bound anyway. Algorithm: §12.3.
 
 ### 9.12 OFFER (`0x40`)
 
@@ -775,7 +777,9 @@ G_W = (0x2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad245a,
 ```
 
 `G_W` corresponds to `B`; scalar multiples are taken with the scalar reduced mod `ℓ`
-(`A = (a mod ℓ)·G_W`). On the wire a point is `W(P) = X(32) ‖ Y(32)`, its affine coordinates
+(`A = (a mod ℓ)·G_W`). The card's Wei25519 key objects are loaded with cofactor `K = 1`
+(`setK(1)`); scalars are reduced mod `ℓ` before use, so the engine never applies a cofactor. On
+the wire a point is `W(P) = X(32) ‖ Y(32)`, its affine coordinates
 big-endian. The host maps it to edwards25519 and encodes it:
 
 ```text
@@ -870,6 +874,10 @@ d  = (d₀ + t) mod n;  d = 0 → 6A80
 aux = 32 random bytes
 sig = BIP-340 Sign(d, message, aux)                (BIP-340 "Default Signing")
 ```
+
+`Q = P_even + t·G` is computed independently of `d` (`PACE_GM`, or `Q = P_even` when `t = 0`, so
+the engine is never given a zero scalar); its parity decides BIP-340's negation of `d`. A zero
+nonce `k'` (probability about 2⁻²⁵⁶) returns `6F00`.
 
 For a BIP-86 key-path spend the host sends `tweak = TaggedHash("TapTweak", x(P))`; for a script
 tree `TaggedHash("TapTweak", x(P) ‖ merkleRoot)`; `tweak = 0³²` signs with the even-y internal key.
@@ -996,7 +1004,7 @@ Commands (`CLA = 0x00`, else `6E00`); the selected file is transient and reset b
 | Command | APDU | Result |
 | --- | --- | --- |
 | SELECT by AID | `00 A4 04 00 07 D2760000850101 00` | `9000` |
-| SELECT file | `00 A4 00 0C 02 fid` | `9000` for `E103`, `E104`; else `6A82`; `P1`/`P2` other than `00 0C` → `6A86` |
+| SELECT file | `00 A4 00 0C 02 fid` | `9000` for `E103`, `E104`; any other data (other `fid`, `Lc ≠ 2`) → `6A82` and the selection is unchanged; `P1`/`P2` other than `00 0C` → `6A86` |
 | READ BINARY | `00 B0 off(2) Le` | No file selected → `6985`; `off > size` → `6B00`; else `min(Ne, size − off)` bytes from `off`, `9000` |
 | UPDATE BINARY | `00 D6 …` | `6985` |
 | other `INS` | — | `6D00` |
@@ -1093,7 +1101,7 @@ index depends on secret data.
 ### 16.5 Points
 
 A private key used in more than one scalar multiplication with external input MUST only be
-multiplied by points that were checked to be on the curve (`IMPORT` `P1 = 0x00` step 5).
+multiplied by points that were checked to be on the curve (`IMPORT` `P1 = 0x00` step 6).
 Single-use private keys (`x` in `OPEN`, `e` in `EXPORT`) rely on `PLAIN_XY` rejecting invalid
 points (§3 item 3). Public keys loaded with `setW` from external input are checked explicitly
 first (`caKey` in `PERSONALIZE`, decompressed `A_T` and `A_S`, §10.5), because `setW` does not
