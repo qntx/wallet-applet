@@ -162,9 +162,10 @@ each transaction is charged two array pages: with card A's page-granular commit 
 per array page and per `setKey`/`setS`, 1,024 B per `setW`/`genKeyPair`, audit-impl F-12) the
 worst case is T-PERSO, T-CREATE, T-INSTALL, T-ERASE and T-OFFER at 2,048 B (40 %), T-CHANGE
 at 1,536 B, T-FAIL, T-OK and T-EDCTR at 1,024 B (measured by `CommitCapacityTest`). Card A's
-memprobe charges the same transactions lower — T-PERSO 1,536, T-CREATE 2,048, T-INSTALL 0,
-T-ERASE 2,048, T-OFFER 2,048, T-CHANGE 1,024, T-FAIL/T-OK/T-EDCTR 512 B
-(`memory.json`) — the simulator model is deliberately the conservative bound. There is no
+memprobe charges the transactions one card can reach no higher — T-PERSO 1,536, T-CREATE
+2,048, T-ERASE 2,048, T-OFFER 2,048, T-CHANGE 1,024, T-FAIL/T-OK/T-EDCTR 512 B
+(`memory.json`); T-INSTALL needs a second card and is not measured on silicon — the simulator
+model is deliberately the conservative bound. There is no
 `clearKey` anywhere (§16.1). Initialisation (`protocol.md` §4.3) runs in `N = 7` steps, each a
 method on the class that owns the objects, dispatched by `WalletApplet` on `init`; `init`
 advances by one atomic `Util.setShort` only after the step completed, and `INIT_DONE` is written
