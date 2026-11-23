@@ -161,7 +161,10 @@ with different field sets (audit-final F-15). The array's physical page alignmen
 each transaction is charged two array pages: with card A's page-granular commit buffer (512 B
 per array page and per `setKey`/`setS`, 1,024 B per `setW`/`genKeyPair`, audit-impl F-12) the
 worst case is T-PERSO, T-CREATE, T-INSTALL, T-ERASE and T-OFFER at 2,048 B (40 %), T-CHANGE
-at 1,536 B, T-FAIL, T-OK and T-EDCTR at 1,024 B (measured by `CommitCapacityTest`). There is no
+at 1,536 B, T-FAIL, T-OK and T-EDCTR at 1,024 B (measured by `CommitCapacityTest`). Card A's
+memprobe charges the same transactions lower — T-PERSO 1,536, T-CREATE 2,048, T-INSTALL 0,
+T-ERASE 2,048, T-OFFER 2,048, T-CHANGE 1,024, T-FAIL/T-OK/T-EDCTR 512 B
+(`memory.json`) — the simulator model is deliberately the conservative bound. There is no
 `clearKey` anywhere (§16.1). Initialisation (`protocol.md` §4.3) runs in `N = 7` steps, each a
 method on the class that owns the objects, dispatched by `WalletApplet` on `init`; `init`
 advances by one atomic `Util.setShort` only after the step completed, and `INIT_DONE` is written
@@ -207,7 +210,11 @@ estimate where nothing measures it.
 Budget rule (acceptance): transient total ≤ 3,390 B (15 % margin on the 3,990 B JCAlgTest
 pool) as reported by the simulator's memory accounting (§8) and, on real cards, by
 `JCSystem.getAvailableMemory` after install (§10). The pool measured on card A is ≈ 4,130 B
-(audit-impl §6). Commit capacity is consumed per page: 512 B per array page and per
+(audit-impl §6): the final card-A run leaves 1,328 B of the 4,128 B `CLEAR_ON_DESELECT` pool free
+after install (32 %) against the simulator's 2,776 B used, and the production install consumes
+7,064 B of persistent memory (`memory.json`) against the ≈ 7.1 KB estimate above. The install
+journal charge is 0 B on card A (`install-journal.json`), which calibrates
+`INSTALL_ALLOC_CHARGE = 0` (§8 patch 2). Commit capacity is consumed per page: 512 B per array page and per
 `setKey`/`setS`, 1,024 B per `setW`/`genKeyPair` on card A (audit-impl F-12); every named
 transaction MUST consume ≤ 50 % of `getMaxCommitCapacity`, and the single-array layout of §4
 keeps every named transaction ≤ 2,048 B (40 %) at the worst-case alignment (measured by
@@ -384,7 +391,8 @@ deviation table:
    test-only applet replaying the pre-F1 constructor fails with `BUFFER_FULL`, while the
    real-card suite measures the charge with the memprobe (`install-journal.json`, §10).
    Allocations (`buildKey`, `new`, `makeTransient*`, `getInstance`) charge the single constant
-   `INSTALL_ALLOC_CHARGE`, 0 until the card handoff measures whether JCOP charges allocations.
+   `INSTALL_ALLOC_CHARGE`, 0 — measured on card A: allocations are not charged to the install
+   journal (`install-journal.json`).
    `<clinit>` is not woven (patch 5's agent skips it): the constants it fills are CAP-loaded
    bytes, not runtime persistent writes.
 3. Auto-abort: when `process` returns with a transaction still open, the runtime aborts it and
@@ -402,10 +410,12 @@ deviation table:
    the measured per-object sizes of §5.1; install fails above 3,990 B; the report is printed by
    the build.
 7. `CLEAR_ON_DESELECT` per context (verified upstream behaviour, RP §7.3).
-8. Call skipping and store faults: the agent guards every call from applet code to a void applet
-   method and to `JCSystem.begin/commit/abortTransaction` with `Fault.skip`; a test arms the
-   n-th call to be skipped. `Fault.armStore(n, v)` makes the n-th persistent `Util.setShort`
-   store `v`.
+8. Call skipping, counting and store faults: the agent guards every call from applet code to a
+   void applet method and to `JCSystem.begin/commit/abortTransaction` with `Fault.skip`; a test
+   arms the n-th call to be skipped, and `Fault.countCalls`/`calls` counts the same sites without
+   arming (the teardown test counts `Session.initEngines` to prove the record engines are
+   re-armed on the zeroed keys). `Fault.armStore(n, v)` makes the n-th persistent
+   `Util.setShort` store `v`.
 9. `MessageDigest` operations are counted per algorithm per command (`Card.digests`), so tests
    can assert the `WAIT` iteration count (§14.4 W3) and HMAC counts of the node cache.
 10. Fixed randomness: `Rng.fix(block)` makes every `RandomData` output of applet engines start
@@ -502,6 +512,13 @@ Rows 1–9 are the admission items of `protocol.md` §3. Evidence lands under `-
 development card A (JCOP4 P71, CPLC IC type `D321`, batch `2092`) and they passed
 (`$A/audit-impl/evidence/card/functional.out`); admission must be repeated on each production
 batch. Multi-card flows are simulation-only while only one development card exists.
+
+Final card-A run (2026-11-23, CAP sha256 `a6e9d2f2…034417e5f`): the whole suite passed once,
+62 tests green, flows/tearing/NVM rows `unavailable` as designed; admission 6 ran the full
+§4.2 decision rule (80 × 10⁶ bits, every statistic's proportion and P-value_T inside bounds,
+`rng.json`); every timing row is inside its bound (`timing.md`, reproduced in the README);
+the install journal charged 0 B and `CLEAR_ON_DESELECT` shows 32 % free after init
+(`install-journal.json`, `memory.json`).
 
 ## 11. Tools
 

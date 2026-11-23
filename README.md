@@ -170,52 +170,53 @@ per-row `*.json`/`*.bin` reports (`init.json`, `install-journal.json`, `commit-c
 record of §10.
 
 Without `-PrealCard` every test still skips as "not run"; the table below is the suite's own
-`timing.md` from the card-A run.
+`timing.md` from the final card-A run (2026-11-23, ACS ACR1552 1S CL Reader PICC, contactless;
+CAP sha256 `a6e9d2f21fc72c2aea1b4e8b5eb714dd692acb3a8ee217bc7ac08ba034417e5f`).
 
 ### Timings (measured on J3R180 (card A))
 
-| command | n | min | median | p95 | max | predicted ms (§16.6) | ≤1500 |
+| command | n | min | median | p95 | max | bound ms | ≤bound |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| INIT_STEP | 7 | 29.3 | 63.6 | 132.5 | 132.5 | 500 | yes |
-| GET_IDENTITY | 1 | 29.3 | 29.3 | 29.3 | 29.3 | — | yes |
-| PERSONALIZE | 1 | 602.9 | 602.9 | 602.9 | 602.9 | — | yes |
-| OPEN | 20 | 248.5 | 251.5 | 251.8 | 251.8 | 160 | yes |
-| VERIFY wrong | 20 | 121.3 | 121.7 | 121.9 | 121.9 | 124 | yes |
-| VERIFY right | 20 | 270.9 | 271.3 | 271.7 | 271.7 | 124 | yes |
-| STATUS | 20 | 73.2 | 73.5 | 73.6 | 73.6 | — | yes |
-| PUBLIC_KEY secp depth3 cold | 20 | 326.7 | 327.0 | 327.2 | 327.3 | — | yes |
-| PUBLIC_KEY secp depth3 warm | 20 | 177.2 | 177.5 | 177.7 | 177.7 | — | yes |
-| PUBLIC_KEY secp depth5 cold | 20 | 523.2 | 523.8 | 524.0 | 524.1 | 411 | yes |
-| PUBLIC_KEY secp depth5 warm | 20 | 178.3 | 178.6 | 178.9 | 179.1 | — | yes |
-| PUBLIC_KEY ed25519 depth3 cold | 20 | 300.4 | 300.5 | 300.8 | 301.0 | — | yes |
-| PUBLIC_KEY ed25519 depth3 warm | 20 | 203.0 | 203.4 | 203.7 | 203.7 | — | yes |
-| PUBLIC_KEY ed25519 depth5 cold | 20 | 365.0 | 365.6 | 365.9 | 365.9 | 217 | yes |
-| PUBLIC_KEY ed25519 depth5 warm | 20 | 204.2 | 204.4 | 204.7 | 204.9 | — | yes |
-| SIGN_ECDSA depth5 cold | 20 | 716.6 | 717.2 | 720.0 | 722.7 | 411 | yes |
-| SIGN_ECDSA depth5 warm | 20 | 368.9 | 369.7 | 372.4 | 374.1 | — | yes |
-| SIGN_BIP340 untweaked cold | 20 | 1124.5 | 1125.2 | 1125.6 | 1125.6 | 724 | yes |
-| SIGN_BIP340 untweaked warm | 20 | 779.5 | 782.9 | 786.1 | 786.1 | — | yes |
-| SIGN_BIP340 tweak cold | 20 | 1170.7 | 1172.2 | 1172.9 | 1173.1 | 724 | yes |
-| SIGN_BIP340 tweak warm | 20 | 821.8 | 823.2 | 823.8 | 823.8 | — | yes |
-| SIGN_ED25519 begin cold | 60 | 597.5 | 598.0 | 598.4 | 598.5 | 430 | yes |
-| SIGN_ED25519 finish cold | 60 | 713.4 | 717.1 | 721.5 | 721.6 | 486 | yes |
-| SIGN_ED25519 64B total cold | 20 | 1318.7 | 1319.3 | 1319.6 | 1319.9 | — | — |
-| SIGN_ED25519 begin warm | 60 | 468.9 | 469.4 | 469.7 | 470.1 | — | yes |
-| SIGN_ED25519 finish warm | 60 | 710.0 | 717.1 | 718.7 | 718.8 | — | yes |
-| SIGN_ED25519 64B total warm | 20 | 1187.2 | 1187.8 | 1188.2 | 1188.4 | — | — |
-| SIGN_ED25519 update | 880 | 97.7 | 100.5 | 100.7 | 102.0 | 21 | yes |
-| SIGN_ED25519 1232B total cold | 20 | 1814.1 | 1815.4 | 1816.1 | 1816.2 | — | — |
-| SIGN_ED25519 1232B total warm | 20 | 1682.1 | 1686.7 | 1687.4 | 1687.5 | — | — |
-| SIGN_ED25519 4032B total cold | 20 | 3008.3 | 3013.5 | 3015.1 | 3015.3 | — | — |
-| SIGN_ED25519 4032B total warm | 20 | 2879.2 | 2884.7 | 2886.8 | 2887.5 | — | — |
-| WAIT | 20 | 1009.0 | 1009.2 | 1009.3 | 1009.3 | 965 | yes |
-| CREATE P1=0 | 20 | 280.5 | 280.8 | 281.0 | 281.1 | 106 | yes |
-| ERASE | 40 | 94.1 | 94.4 | 94.4 | 95.8 | — | yes |
-| CREATE P1=1 | 20 | 277.8 | 278.3 | 278.4 | 278.5 | 106 | yes |
-| OFFER offer=NONE | 1 | 259.3 | 259.3 | 259.3 | 259.3 | — | yes |
-| OFFER offer=VALID | 20 | 202.6 | 203.0 | 203.4 | 203.7 | — | yes |
-| SELECT | 20 | 27.2 | 27.3 | 27.4 | 27.5 | — | yes |
-| SELECT after reset | 20 | 29.3 | 29.5 | 29.6 | 29.6 | — | yes |
+| INIT_STEP | 7 | 29.4 | 59.5 | 147.6 | 147.6 | 500 | yes |
+| GET_IDENTITY | 1 | 29.4 | 29.4 | 29.4 | 29.4 | — | yes |
+| PERSONALIZE | 1 | 609.0 | 609.0 | 609.0 | 609.0 | — | yes |
+| OPEN | 20 | 311.0 | 314.5 | 314.8 | 314.9 | 1500 | yes |
+| VERIFY wrong | 20 | 79.3 | 79.4 | 79.5 | 79.6 | 1500 | yes |
+| VERIFY right | 20 | 214.0 | 214.3 | 214.6 | 216.6 | 1500 | yes |
+| STATUS | 20 | 33.0 | 33.2 | 33.2 | 33.3 | 1500 | yes |
+| PUBLIC_KEY secp depth3 cold | 20 | 236.7 | 237.0 | 237.3 | 237.4 | 1500 | yes |
+| PUBLIC_KEY secp depth3 warm | 20 | 123.9 | 124.4 | 124.5 | 124.5 | 1500 | yes |
+| PUBLIC_KEY secp depth5 cold | 20 | 411.5 | 412.1 | 412.5 | 412.6 | 1500 | yes |
+| PUBLIC_KEY secp depth5 warm | 20 | 125.1 | 125.5 | 125.8 | 125.9 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 cold | 20 | 211.5 | 211.8 | 211.9 | 212.0 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 warm | 20 | 149.9 | 150.2 | 150.4 | 150.4 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 cold | 20 | 253.7 | 253.9 | 254.1 | 254.1 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 warm | 20 | 150.9 | 151.2 | 151.4 | 151.4 | 1500 | yes |
+| SIGN_ECDSA depth5 cold | 20 | 601.8 | 603.7 | 606.4 | 606.7 | 1500 | yes |
+| SIGN_ECDSA depth5 warm | 20 | 314.4 | 315.4 | 318.2 | 320.5 | 1500 | yes |
+| SIGN_BIP340 untweaked cold | 20 | 1008.4 | 1011.4 | 1012.2 | 1012.3 | 1500 | yes |
+| SIGN_BIP340 untweaked warm | 20 | 723.5 | 726.8 | 727.5 | 728.0 | 1500 | yes |
+| SIGN_BIP340 tweak cold | 20 | 1058.0 | 1059.9 | 1060.3 | 1060.7 | 1500 | yes |
+| SIGN_BIP340 tweak warm | 20 | 769.4 | 769.8 | 770.5 | 770.6 | 1500 | yes |
+| SIGN_ED25519 begin cold | 60 | 494.8 | 498.1 | 498.4 | 498.8 | 1500 | yes |
+| SIGN_ED25519 finish cold | 60 | 667.1 | 668.4 | 671.7 | 671.9 | 1500 | yes |
+| SIGN_ED25519 64B total cold | 20 | 1168.5 | 1169.6 | 1169.9 | 1170.0 | — | — |
+| SIGN_ED25519 begin warm | 60 | 411.3 | 415.9 | 416.3 | 416.5 | 1500 | yes |
+| SIGN_ED25519 finish warm | 60 | 666.9 | 668.4 | 669.0 | 669.0 | 1500 | yes |
+| SIGN_ED25519 64B total warm | 20 | 1080.3 | 1084.6 | 1085.0 | 1085.2 | — | — |
+| SIGN_ED25519 update | 880 | 43.4 | 46.1 | 46.3 | 53.2 | 1500 | yes |
+| SIGN_ED25519 1232B total cold | 20 | 1394.4 | 1395.0 | 1395.3 | 1402.2 | — | — |
+| SIGN_ED25519 1232B total warm | 20 | 1312.1 | 1312.8 | 1313.4 | 1313.7 | — | — |
+| SIGN_ED25519 4032B total cold | 20 | 1939.2 | 1942.9 | 1943.7 | 1944.1 | — | — |
+| SIGN_ED25519 4032B total warm | 20 | 1858.5 | 1860.5 | 1861.6 | 1861.6 | — | — |
+| WAIT | 20 | 969.2 | 969.5 | 969.6 | 969.7 | 1500 | yes |
+| CREATE P1=0 | 20 | 206.3 | 206.9 | 207.1 | 209.7 | 1500 | yes |
+| ERASE | 40 | 53.7 | 54.0 | 54.1 | 54.2 | 1500 | yes |
+| CREATE P1=1 | 20 | 201.7 | 202.1 | 202.3 | 202.4 | 1500 | yes |
+| OFFER offer=NONE | 1 | 216.4 | 216.4 | 216.4 | 216.4 | 1500 | yes |
+| OFFER offer=VALID | 20 | 162.3 | 162.8 | 163.0 | 163.1 | 1500 | yes |
+| SELECT | 20 | 27.6 | 27.6 | 27.7 | 58.8 | 1500 | yes |
+| SELECT after reset | 20 | 29.5 | 29.6 | 29.7 | 29.8 | 1500 | yes |
 
 ## Tools (`qntx-card`)
 

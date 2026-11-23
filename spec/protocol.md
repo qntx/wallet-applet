@@ -1144,14 +1144,44 @@ cleared together with its value (on the development card on every deselection, i
 re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`, before any
 use (§8.5). Each initialisation step of §4.3 MUST complete within
 500 ms; on the baseline chip every command MUST complete within
-1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Card times computed
-from unit costs measured on the development card: `OPEN` 160 ms; `VERIFY` 124 ms; `WAIT` 965 ms;
-`CREATE` 106 ms; `SIGN_ECDSA` 411 ms (cold, depth 5); `SIGN_BIP340` 724 ms (cold); `SIGN_ED25519`
-begin 430 ms, update 21 ms, finish 486 ms; `PUBLIC_KEY` ed25519 217 ms; `OFFER` 137 ms (78 ms with
-a valid offer); `EXPORT` `P1 = 0x00` 424 ms; `IMPORT` `P1 = 0x00` 471 ms. The longest command
-(`WAIT`) has a margin of 1.55× to the limit (1.36× at the 1100 ms bound of §3 item 9), every
-other command at least 2×. Full commands are timed by the real-card suite before
-freeze.
+1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Measured on the
+development card (JCOP 4 P71, J3R351, contactless, host-side round trip including transport;
+median / p95 ms, n):
+
+| Command | median | p95 | n |
+| --- | --- | --- | --- |
+| `SELECT` | 28 | 28 | 20 |
+| `GET_IDENTITY` | 29 | 29 | 1 |
+| initialisation step (max) | 148 | 148 | 7 |
+| `PERSONALIZE` | 609 | 609 | 1 |
+| `OPEN` | 315 | 315 | 20 |
+| `STATUS` | 33 | 33 | 20 |
+| `VERIFY` right | 214 | 215 | 20 |
+| `VERIFY` wrong | 79 | 80 | 20 |
+| `WAIT` | 970 | 970 | 20 |
+| `CREATE` `P1 = 0` | 207 | 207 | 20 |
+| `CREATE` `P1 = 1` | 202 | 202 | 20 |
+| `ERASE` | 54 | 54 | 40 |
+| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 413 | 20 |
+| `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 151 | 20 |
+| `SIGN_ECDSA`, depth 5, cold | 604 | 606 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 315 | 318 | 20 |
+| `SIGN_BIP340` (tweak), cold | 1060 | 1060 | 20 |
+| `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
+| `SIGN_ED25519` begin, cold | 498 | 498 | 60 |
+| `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
+| `SIGN_ED25519` finish, cold | 668 | 672 | 60 |
+| `OFFER` first | 216 | 216 | 1 |
+| `OFFER` valid | 163 | 163 | 20 |
+
+The slowest command (`SIGN_BIP340` with a tweak, cold) has a margin of 1.4× to the limit;
+`WAIT` 1.5× (1.1× at the 1100 ms upper bound of §3 item 9). A command record costs about
+33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,395 ms cold
+(498 + 5 × 46 + 668). `docs/architecture.md` §10 lists the real-card
+timing suite.
 
 ### 16.7 Randomness
 
