@@ -89,8 +89,12 @@ public final class Fixture {
         return Integer.parseInt(System.getProperty("qntx.realcard.differential", "1000"));
     }
 
-    public static long rngBytes() {
-        return Long.parseLong(System.getProperty("qntx.realcard.rng", "1048576"));
+    /**
+     * Number of RNG sequences admission 6 collects, each 10⁶ bits (125,000 B). The default 80 is
+     * the SP 800-22 §4.2 decision-rule size; {@code 1} runs the single-sequence p-value checks.
+     */
+    public static int rngSequences() {
+        return Integer.parseInt(System.getProperty("qntx.realcard.sequences", "80"));
     }
 
     public static Path out() {

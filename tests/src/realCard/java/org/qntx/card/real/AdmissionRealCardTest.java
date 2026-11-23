@@ -483,7 +483,8 @@ final class AdmissionRealCardTest {
         Fixture.require();
         Fixture.ensureInstalled(Fixture.CapKind.PROBE);
         Fixture.card().ok(RealCard.SELECT_PROBE);
-        long want = Fixture.rngBytes();
+        int sequences = Fixture.rngSequences();
+        long want = (long) sequences * 125_000;
         java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
         while (buf.size() < want) {
             int n = (int) Math.min(240, want - buf.size());
@@ -491,13 +492,29 @@ final class AdmissionRealCardTest {
         }
         byte[] rng = buf.toByteArray();
         Files.write(Fixture.out().resolve("rng.bin"), rng);
-        Map<String, Double> p = RngStats.all(rng);
-        Map<String, Object> report = new LinkedHashMap<>(p);
-        Files.writeString(
-                Fixture.out().resolve("rng.json"),
-                com.fasterxml.jackson.jr.ob.JSON.std.asString(report));
-        for (Map.Entry<String, Double> e : p.entrySet()) {
-            assertTrue(e.getValue() >= 0.01, e.getKey() + " p = " + e.getValue());
+        if (sequences == 1) {
+            Map<String, Double> p = RngStats.all(rng);
+            Files.writeString(
+                    Fixture.out().resolve("rng.json"),
+                    com.fasterxml.jackson.jr.ob.JSON.std.asString(new LinkedHashMap<>(p)));
+            for (Map.Entry<String, Double> e : p.entrySet()) {
+                assertTrue(e.getValue() >= 0.01, e.getKey() + " p = " + e.getValue());
+            }
+        } else {
+            // §3 item 6 admission rule: the SP 800-22 §4.2 two-level decision — per
+            // statistic the proportion of passing sequences and P-value_T
+            Map<String, Object> report = RngStats.evaluate(rng, sequences);
+            Files.writeString(
+                    Fixture.out().resolve("rng.json"),
+                    com.fasterxml.jackson.jr.ob.JSON.std.asString(report));
+            @SuppressWarnings("unchecked")
+            Map<String, Map<String, Object>> tests =
+                    (Map<String, Map<String, Object>>) report.get("tests");
+            for (Map.Entry<String, Map<String, Object>> e : tests.entrySet()) {
+                assertTrue(
+                        Boolean.TRUE.equals(e.getValue().get("ok")),
+                        e.getKey() + " " + e.getValue());
+            }
         }
         // §3 item 6: the first 32 bytes after each of 100 power-ups are pairwise distinct
         java.util.Set<String> firsts = new TreeSet<>();

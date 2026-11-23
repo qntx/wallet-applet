@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package org.qntx.card.real;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -136,6 +139,59 @@ public final class RngStats {
         p.put("serial-16-a", serial[0]);
         p.put("serial-16-b", serial[1]);
         return p;
+    }
+
+    /**
+     * SP 800-22 §4.2 second-level decision over {@code sequences} equal slices of {@code data}: per
+     * statistic the count of sequences with p ≥ α must reach the proportion bound (1 − α) −
+     * 3√(α(1−α)/N), and the p-values' uniformity over ten bins (P-value_T = igamc(9/2, χ²/2)) must
+     * reach 0.0001. The report maps each statistic to {@code pass}, {@code proportion}, {@code
+     * pValueT} and {@code ok}.
+     */
+    public static Map<String, Object> evaluate(byte[] data, int sequences) {
+        int slice = data.length / sequences;
+        Map<String, List<Double>> stats = new LinkedHashMap<>();
+        for (int s = 0; s < sequences; s++) {
+            byte[] d = Arrays.copyOfRange(data, s * slice, (s + 1) * slice);
+            for (Map.Entry<String, Double> e : all(d).entrySet()) {
+                stats.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).add(e.getValue());
+            }
+        }
+        double alpha = 0.01;
+        double lower = (1 - alpha) - 3 * Math.sqrt(alpha * (1 - alpha) / sequences);
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("sequences", sequences);
+        report.put("bitsPerSequence", (long) slice * 8);
+        report.put("alpha", alpha);
+        report.put("minProportion", lower);
+        Map<String, Object> tests = new LinkedHashMap<>();
+        for (Map.Entry<String, List<Double>> e : stats.entrySet()) {
+            List<Double> p = e.getValue();
+            long pass = p.stream().filter(v -> v >= alpha).count();
+            double pValueT = pValueT(p);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("pass", pass);
+            row.put("proportion", (double) pass / p.size());
+            row.put("pValueT", pValueT);
+            row.put("ok", pass >= Math.ceil(lower * p.size()) && pValueT >= 0.0001);
+            tests.put(e.getKey(), row);
+        }
+        report.put("tests", tests);
+        return report;
+    }
+
+    /** SP 800-22 §4.2.2: χ² uniformity of {@code p} over ten equal bins. */
+    static double pValueT(List<Double> p) {
+        int[] bins = new int[10];
+        for (double v : p) {
+            bins[Math.min(9, (int) (v * 10))]++;
+        }
+        double expect = p.size() / 10.0;
+        double chi2 = 0;
+        for (int f : bins) {
+            chi2 += (f - expect) * (f - expect) / expect;
+        }
+        return gammaQ(4.5, chi2 / 2);
     }
 
     static double frequency(byte[] data, long n) {

@@ -234,7 +234,9 @@ tasks.register<Test>("realCard") {
     providers.gradleProperty("realCardDifferential").orNull?.let {
         systemProperty("qntx.realcard.differential", it)
     }
-    providers.gradleProperty("realCardRng").orNull?.let { systemProperty("qntx.realcard.rng", it) }
+    providers.gradleProperty("realCardSequences").orNull?.let {
+        systemProperty("qntx.realcard.sequences", it)
+    }
     providers.gradleProperty("realCardKeep").orNull?.let {
         systemProperty("qntx.realcard.keep", "true")
     }

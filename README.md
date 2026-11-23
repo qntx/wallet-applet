@@ -156,7 +156,9 @@ and the suite classes). Properties: `-PrealCard=<reader>` (required to run),
 `-PrealCard{Cap,MemCap,ProbeCap}=<path>` (prebuilt CAPs; defaults are the in-tree builds,
 sha256 printed), `-Pqntx.gp=<path>` (`gp` wrapper), `-PrealCardOut=<dir>` (evidence,
 default `tests/build/realcard`), `-PrealCardKeep` (keep installed packages),
-`-PrealCardDifferential=<n>` (default 1,000), `-PrealCardRng=<bytes>` (default 1 MiB). The
+`-PrealCardDifferential=<n>` (default 1,000), `-PrealCardSequences=<n>` (admission 6's RNG
+sequences of 10⁶ bits each; default 80 = the SP 800-22 §4.2 decision-rule size, `1` runs the
+single-sequence p-value checks). The
 flow, tearing and NVM-endurance rows report `unavailable` until their hardware requirements
 exist (see §10); the card identity policy of `REALCARD.md` refuses anything that is not a
 development card before the first install.
