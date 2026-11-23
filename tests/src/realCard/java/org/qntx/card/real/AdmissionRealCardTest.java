@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.nio.file.Files;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -18,6 +19,9 @@ import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.DERSequence;
+import org.bouncycastle.crypto.engines.AESEngine;
+import org.bouncycastle.crypto.macs.CMac;
+import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.math.ec.ECCurve;
 import org.bouncycastle.math.ec.ECPoint;
 import org.junit.jupiter.api.AfterAll;
@@ -164,6 +168,42 @@ final class AdmissionRealCardTest {
         }
         assertEquals(0x9000, sw(0x50, 6, q), "capscan extra RSA key");
         assertEquals(0x9000, sw(0x50, 8, null), "capscan second transient EC key");
+        // capscan 10–14: the session-layer primitives the wallet actually runs —
+        // SHA-256 (KDF), SHA-512 (Ed25519), AES-CBC-NOPAD and AES-CMAC-128 (session
+        // records) on a TRANSIENT_DESELECT key, and getW (the OPEN response)
+        byte[] in16 = new byte[16];
+        RND.nextBytes(in16);
+        assertArrayEquals(
+                MessageDigest.getInstance("SHA-256").digest(in16),
+                ok(0x50, 10, in16),
+                "capscan SHA-256");
+        assertArrayEquals(
+                MessageDigest.getInstance("SHA-512").digest(in16),
+                ok(0x50, 11, in16),
+                "capscan SHA-512");
+        byte[] key16 = new byte[16];
+        byte[] block16 = new byte[16];
+        RND.nextBytes(key16);
+        RND.nextBytes(block16);
+        byte[] kb = new byte[32];
+        System.arraycopy(key16, 0, kb, 0, 16);
+        System.arraycopy(block16, 0, kb, 16, 16);
+        javax.crypto.Cipher aes =
+                javax.crypto.Cipher.getInstance("AES/ECB/NoPadding"); // CBC, IV = 0, one block
+        aes.init(
+                javax.crypto.Cipher.ENCRYPT_MODE,
+                new javax.crypto.spec.SecretKeySpec(key16, "AES"));
+        assertArrayEquals(aes.doFinal(block16), ok(0x50, 12, kb), "capscan AES-CBC");
+        CMac cmac = new CMac(AESEngine.newInstance());
+        cmac.init(new KeyParameter(key16));
+        cmac.update(block16, 0, 16);
+        byte[] tag = new byte[16];
+        cmac.doFinal(tag, 0);
+        assertArrayEquals(tag, ok(0x50, 13, kb), "capscan AES-CMAC");
+        byte[] g = Arrays.copyOfRange(secpDomain(), 96, 161);
+        assertEquals(0x9000, sw(0x10, 0, secpDomain()), "domain for getW");
+        assertEquals(0x9000, sw(0x12, 0, g), "setW for getW");
+        assertArrayEquals(g, ok(0x50, 14, null), "capscan getW");
         byte[] commit = ok(0x50, 9, null);
         int maxCommit = ((commit[0] & 0xFF) << 8) | (commit[1] & 0xFF);
         int unusedCommit = ((commit[2] & 0xFF) << 8) | (commit[3] & 0xFF);
