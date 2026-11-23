@@ -13,16 +13,17 @@ the invariants every change keeps.
 
 ## Status
 
-The repository is being rewritten from zero against `spec/protocol.md`. This revision implements
-identity, personalisation, the secure session, the wallet commands, derivation, the three
-signing commands and multi-card transfer (§5–§9.15, §10.1–10.5, §11–§12); NDEF and the tools
-follow.
+Everything of qntx card protocol 1 is implemented: the wallet and NDEF applets (§5–§15), the
+simulator, the host library, the provisioning tool and the vectors. The protocol is **not
+frozen**: it freezes only after the external audit (`spec/protocol.md` §17), and the real-card
+suite below has not run on hardware yet — every §10 row exists and has been self-checked on the
+simulator only.
 
 ## Layout
 
 | Path | Content | License |
 | --- | --- | --- |
-| `applet/` | The one CAP: package `org.qntx.card` (Java Card 3.0.5 Classic) | AGPL-3.0-or-later |
+| `applet/` | The one CAP: package `org.qntx.card` (Java Card 3.0.5 Classic), wallet + NDEF applets | AGPL-3.0-or-later |
 | `sim/` | jcardsim fork (`sim/jcardsim`, pinned upstream commit plus patches) with transactions, power-loss injection and memory accounting | Apache-2.0 (fork), AGPL-3.0-or-later |
 | `host/` | Reference host library written from the specification | AGPL-3.0-or-later |
 | `tests/` | Simulator, vector and mutation tests | AGPL-3.0-or-later |
@@ -49,6 +50,219 @@ The CAP is `applet/build/cap/qntx-card.cap`; two builds of the same sources have
 Tests run the applet's JVM classes in the simulator with the `sim` agent (`-javaagent`), which
 journals persistent writes, injects power loss and accounts transient memory with sizes measured on
 the baseline chip (NXP JCOP 4 P71).
+
+## Simulator (`card-sim.jar`)
+
+`./gradlew :sim:shadowJar` builds `sim/build/libs/card-sim.jar`, a fat jar of the simulator,
+applet and host classes. The manifest's `Launcher-Agent-Class` starts the bytecode agent that
+makes persistent writes tearable; run it directly:
+
+```bash
+java -jar card-sim.jar [--cards N] [--port P] [--state empty|factory|blank]
+```
+
+- `--cards N`: simulated cards, 1–16 (default 3). Card `i` listens on `127.0.0.1:P+i`;
+  `--port 0` gives every card an ephemeral port.
+- `--port P`: first TCP port (default 35963, vpcd's port).
+- `--state empty`: no package and no applets — only the issuer security domain (below).
+- `--state factory`: install the wallet and NDEF applets and stop (life `FACTORY`).
+- `--state blank` (default): also personalise each card under the `ca1` test CA of
+  `spec/vectors/cert.json` (life `BLANK`).
+
+In `factory` and `blank` states every card carries the wallet applet (`F0716E74780101`) and the
+NDEF applet (`D2760000850101`, message "qntx card"). Startup prints one `card` line per card —
+`empty` cards have no identity, so their lines end after the port — then, in `blank` state only,
+a single `anchor` line, then `ready`:
+
+```text
+card <i> port <port> id <ID(A), 32 hex> short <XXXX-XXXX>
+anchor <ca1 public key, 130 hex>
+ready
+```
+
+Bad arguments print usage on stderr and exit 2; `--help` prints it on stdout and exits 0.
+
+### Framing
+
+Each card's TCP connection carries vpcd-style frames `u16(len) ‖ payload` (vsmartcard vpcd):
+
+| `len` | Payload | Meaning | Reply |
+| --- | --- | --- | --- |
+| ≥ 4 | command APDU | transmit to the card | `u16(len) ‖ R-APDU` |
+| 1 | `00` | power off | none |
+| 1 | `01` | power on (a power cycle when unpowered; no-op when powered) | none |
+| 1 | `02` | reset (power cycle) | none |
+| 1 | `04` | get ATR | `u16(len) ‖ ATR` |
+| 3 | `10 ‖ u16(N)` | arm power loss at the N-th persistent write of the next command that makes at least N writes | none |
+
+A new connection powers the card on with a power cycle; closing it powers the card off. Card
+state (persistent memory) lives as long as the server process; one connection per card at a time,
+a second connection waits until the first closes. Anything else — `len` 0 or 2, a 3-byte payload
+not starting with `10`, an unknown control byte, `N = 0` — closes the connection.
+
+An APDU on an unpowered card, or an APDU during which the armed tear fired, is answered with the
+empty frame `00 00` — no response, the field was lost. After a tear the card is unpowered until a
+power-on or reset control. The armed tear is a per-command write count: it stays armed until it
+fires or the card is power-cycled/powered off.
+
+### Issuer security domain
+
+Every card answers as a simulated GlobalPlatform issuer security domain, AID
+`A000000151000000`, selected by default at power-up and answering SELECT-by-empty-AID with the
+FCI `6F108408A000000151000000A5049F6501FF`. One AES-128 key set at KVN `0x30`, ENC = MAC = DEK =
+`404142434445464748494A4B4C4D4E4F` (the GP test key). Emulated:
+
+- SCP03 with `i = 0x00` (random card challenge, no sequence counter, no R-MAC/R-ENC, S8 MACs):
+  INITIALIZE UPDATE (KVN `00` or `30`, else `6A88`), EXTERNAL AUTHENTICATE with security level
+  `01` or `03`, and from then on only `84`-wrapped commands — a bad C-MAC closes the channel.
+- GET DATA `9F 7F` returns the CPLC (fixed bytes except a per-card IC serial); unknown tags and
+  other GET DATA → `6A88`.
+- GET STATUS (`80 F2`) for the ISD, applications, load files and modules, in the card A formats.
+- INSTALL [for load] + LOAD: the `C4` block must be a concatenation of components each
+  byte-identical to the same-tagged component of the CAP embedded in the jar and covering all of
+  them except Descriptor and Debug; an LFDBH, when present, must equal the block's SHA-256.
+- INSTALL [for install and make selectable]: loaded package, class AID `F0716E74780101` or
+  `F0716E74780201`, free instance AID, empty privileges, applet data from the `C9` TLV.
+- PUT KEY `80 D8 kvn 81` replacing all three keys as `GPPro putKeys(keys, true)` encodes them —
+  AES or DES entries encrypted under the static DEK, each KCV verified — after which the old keys
+  no longer open a channel.
+
+Not emulated: SCP02/SCP01 (INITIALIZE UPDATE with `i ≠ 00` gets `6A86`), key diversification,
+sequence counters, R-MAC, DAP blocks, receipts, install tokens, delegated management, extradition
+and DELETE — anything not listed answers `6D00`, and management commands outside a secure channel
+answer `6982`.
+
+## Real-card suite
+
+`tests/src/realCard` implements the real-card rows of `docs/architecture.md` §10 — admission 1–9
+(`spec/protocol.md` §3) plus Timing, the `Lc = 248` APDU receive test, Flows, Tearing and the
+sacrificial NVM endurance run. It drives a card through a `Reader` transport: PC/SC
+(`javax.smartcardio`) or the in-process simulator, and talks to a test-only admission CAP
+(`tests/src/admission`, package `F0716E7478FF`, applets `…FF01`/`…FF02`, built by
+`:tests:admissionCap` into `tests/build/cap/admission.cap` — never part of a release artifact) and
+to the product wallet.
+
+```bash
+./gradlew :tests:realCard                          # no reader: every test reports "not run"
+./gradlew :tests:realCard -PrealCard="ACS ACR"     # PC/SC terminal (name or substring)
+./gradlew :tests:realCard -PrealCard=sim           # simulator self-check, not hardware evidence
+```
+
+The suite never runs in CI and is not attached to `check` (`check` still builds the admission CAP
+and the suite classes). Properties: `-PrealCard=<reader>` (required, or `sim`),
+`-PrealCardPeer=<reader>` (second card for EXPORT/IMPORT timing), `-PrealCardContactless=true`
+(WAIT timing when the transport cannot say it is contactless), `-PrealCardTear=<driver>`
+(programmable reader; none is supported yet), `-PrealCardSacrificial=<CPLC IC serial>`
+(destructive NVM row; refuses development card A `D321`/`49917821` unconditionally).
+
+Every row appends a JSON line (`row`, `name`, `verdict`, `reader`, `cplc`, `detail`) to
+`tests/build/reports/realcard/results.jsonl`, which feeds the batch record of §10. Rows on the
+simulator are labelled `"reader":"sim"`: timing values are meaningless, contactless and RNG
+quality are not modelled, and rows the simulator cannot express (`genKeyPair` inside a
+transaction, contactless WAIT timing) are skipped with a stated reason rather than passed.
+
+No hardware has been run in this repository yet: the suite exists, compiles, lists every §10 test
+and has been self-checked on the simulator only.
+
+## Tools (`qntx-card`)
+
+`./gradlew :tools:installDist` builds the batch provisioning CLI at
+`tools/build/install/qntx-card/bin/qntx-card` (also in the `qntx-card-<version>.zip` release
+artifact). Every subcommand takes exactly one transport — `--sim host:port` for a `card-sim.jar`
+TCP endpoint or `--reader <name>` for a PC/SC terminal — and opens a GlobalPlatform secure
+channel with `--scp 03` or `--scp 02-55`. Secrets come from the environment only, never
+arguments or output: `QNTX_ISD_KEY` (the card's ISD key, hex) for every subcommand and
+`QNTX_HSM_PIN` for `personalise --hsm-config`.
+
+- `registry` prints the card's issuer security domain, applications and load files as sorted
+  `<ISD|SSD|APP|PKG> <AID> <lifecycle>` lines — the baseline file format the other subcommands
+  diff against. An empty card prints exactly `ISD A000000151000000 01`.
+- `install --cap <file> --cap-sha256 <hex> --scp <s> --baseline <file> --ndef <hex>` checks the
+  CAP hash before touching the card, loads it and installs both applets (the NDEF message is
+  1–100 bytes, hex), then asserts the registry is baseline + the package and the two
+  applications.
+- `personalise --scp <s> --baseline <file> --batch-record <file> --test-ca <file> |
+  --hsm-config <file> --hsm-key <label>` runs §14.3 steps 4–9: CPLC and identity, certificate
+  issued by the CA (`--test-ca` accepts only the pinned ca1/ca2 test anchors; HSM mode accepts
+  only production anchors), the read-back short ID to type, and independent replacement ISD keys.
+  Each card appends one JSON line
+  `{"cardId":"…","shortId":"…","cplc":"…","cert":"…","loadFileHash":"…"}` to the batch record.
+- `shell --test-anchors` opens a session REPL (`open`, `verify`, `inner`, `apdu`) for
+  development against `--sim`.
+
+Example against a fresh simulator:
+
+```bash
+java -jar sim/build/libs/card-sim.jar --cards 1 --state empty &
+export QNTX_ISD_KEY=404142434445464748494a4b4c4d4e4f
+qntx-card registry --sim 127.0.0.1:35963 > baseline.txt      # ISD A000000151000000 01
+qntx-card install  --sim 127.0.0.1:35963 --cap applet/build/cap/qntx-card.cap \
+                   --cap-sha256 $(sha256sum applet/build/cap/qntx-card.cap | cut -d' ' -f1) \
+                   --scp 03 --baseline baseline.txt --ndef D1010C5402656E7178742063617264
+qntx-card personalise --sim 127.0.0.1:35963 --scp 03 --baseline baseline.txt \
+                      --batch-record batch.jsonl --test-ca spec/vectors/cert.json
+```
+
+## Budgets
+
+Measured on this tree (architecture §14.7 R6; the CI build job reports them again):
+
+- **CAP**: `qntx-card.cap` is 129,693 B; the load-file components inside it
+  (`org/qntx/card/javacard/*.cap`) total 26,864 B.
+- **Transient**: the simulator's memory report ends `total 2568 / 3990 (budget 3390)` — 2,568 B
+  of the 3,990 B JCAlgTest pool, inside the §5.1 acceptance budget of 3,390 B.
+- **Persistent**: ≈ 6.6 KB of objects and arrays plus the ≈ 24 KB CAP against the 157,524 B
+  J3R180 NVM (architecture §5.1). That is the architecture estimate — the simulator accounts
+  transient bytes only, so it is not re-measured here.
+- **Card time** (protocol §16.6, computed from unit costs measured on development card A; full
+  commands not yet timed — the real-card `Timing` row does that):
+
+| Command | ms | bytes up | bytes down |
+| --- | ---: | ---: | ---: |
+| SELECT | 2 | 13 | 2 |
+| OPEN | 160 | 71 | 228 |
+| STATUS | 17 | 30 | 26 |
+| VERIFY | 124 | 62 | 106 |
+| WAIT | 965 | 30 | 26 |
+| CREATE | 106 | 126 | 106 |
+| CHANGE | 27 | 62 | 26 |
+| ERASE | 25 | 30 | 26 |
+| OFFER | 137 | 30 | 154 |
+| OFFER_VALID | 78 | 30 | 154 |
+| EXPORT0 | 424 | 254 | 154 |
+| EXPORT1 | 21 | 62 | 202 |
+| IMPORT0 | 471 | 254 | 26 |
+| IMPORT1 | 103 | 206 | 106 |
+| PUBLIC_KEY secp256k1 depth 3 cold | 202 | 46 | 90 |
+| PUBLIC_KEY ed25519 depth 4 cold | 217 | 46 | 90 |
+| SIGN_ECDSA depth 5 cold | 411 | 78 | 90 |
+| SIGN_BIP340 depth 5 cold | 724 | 110 | 90 |
+| SIGN_ED25519 BEGIN depth 4 cold | 430 | 46 | 90 |
+| SIGN_ED25519 UPDATE 236 B | 21 | 254 | 26 |
+| SIGN_ED25519 FINISH | 486 | 30 | 58 |
+
+## Releases
+
+Tag `v<version>` (the `version` in `gradle.properties`) runs `release.yml`, which builds from a
+clean checkout, runs the full gate, produces `build/dist/` and publishes it as a GitHub release:
+
+- `qntx-card.cap` — the one CAP (package `F0716E747800`)
+- `card-sim.jar` — the simulator
+- `vectors.zip` — `spec/vectors` plus its MIT/Apache-2.0 licenses
+- `qntx-card-<version>.zip` — the `qntx-card` tool distribution
+- `qntx-card.cdx.json` — the aggregate CycloneDX SBOM
+- `SHA256SUMS` — `<sha256>  <name>` for every other file
+
+Verify a downloaded release:
+
+```bash
+cd dist
+sha256sum -c SHA256SUMS
+gh attestation verify qntx-card.cap --repo qntx/wallet-applet
+```
+
+qntx/wallet CI pins a release tag and the `card-sim.jar` SHA-256 from `SHA256SUMS`; the
+simulator is not hardware evidence.
 
 ## License
 

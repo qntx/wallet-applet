@@ -11,6 +11,10 @@ pit-junit5 = "1.2.3"
 google-java-format = "1.35.0"
 ktlint = "1.8.0"
 jackson-jr = "2.19.1"
+gppro = "26.04.20.1"
+apdu4j = "26.04.20.1"
+slf4j = "2.0.18"
+picocli = "4.7.7"
 
 [libraries]
 ant-javacard = { module = "com.github.martinpaljak:ant-javacard", version.ref = "ant-javacard" }
@@ -21,8 +25,15 @@ junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 jackson-jr = { module = "com.fasterxml.jackson.jr:jackson-jr-objects", version.ref = "jackson-jr" }
+gppro = { module = "com.github.martinpaljak:globalplatformpro", version.ref = "gppro" }
+apdu4j-core = { module = "com.github.martinpaljak:apdu4j-core", version.ref = "apdu4j" }
+apdu4j-pcsc = { module = "com.github.martinpaljak:apdu4j-pcsc", version.ref = "apdu4j" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
+picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
 
 [plugins]
 spotless = { id = "com.diffplug.spotless", version = "8.5.1" }
 cyclonedx = { id = "org.cyclonedx.bom", version = "3.2.4" }
 pitest = { id = "info.solidsoft.pitest", version = "1.19.0" }
+shadow = { id = "com.gradleup.shadow", version = "9.6.1" }

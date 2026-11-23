@@ -13,6 +13,7 @@ import { derivationDoc } from './derivation.ts';
 import { ecdsaDoc } from './ecdsa.ts';
 import { ed25519Doc } from './ed25519.ts';
 import { kdfDoc } from './kdf.ts';
+import { ndefDoc } from './ndef.ts';
 import { recordDoc } from './record.ts';
 import { selftest } from './selftest.ts';
 import { sessionDoc } from './session.ts';
@@ -32,6 +33,7 @@ const FILES: Record<string, () => unknown> = {
   'bip340.json': bip340Doc,
   'ed25519.json': ed25519Doc,
   'transfer.json': transferDoc,
+  'ndef.json': ndefDoc,
 };
 
 const out = process.argv[2];

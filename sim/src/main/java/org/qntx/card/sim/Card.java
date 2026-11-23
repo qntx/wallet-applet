@@ -78,6 +78,19 @@ public final class Card {
         }
     }
 
+    /**
+     * Deselect the currently selected applet, as a SELECT of a different application would; used by
+     * {@link Isd} when the card manager takes over the logical channel.
+     */
+    public void deselectApplet() {
+        runtime.startCommand();
+        try {
+            runtime.deselectCurrent();
+        } finally {
+            runtime.unbind();
+        }
+    }
+
     /** Arm the tear point on the n-th persistent write of a later command. */
     public void tearAt(int n) {
         runtime.armTear(n);
@@ -86,6 +99,11 @@ public final class Card {
     /** Power cycle: clears reset/deselect transient state and selection. */
     public void powerCycle() {
         runtime.reset();
+    }
+
+    /** The simulator's ATR, the answer of a vpcd-style get-ATR control (architecture §8). */
+    public byte[] atr() {
+        return simulator.getATR();
     }
 
     /** The installed applet object, for tests that inspect transient state by reflection. */

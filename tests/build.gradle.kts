@@ -6,17 +6,24 @@ plugins {
 description = "Simulator, vector and mutation tests of the qntx card applet"
 
 val agent: Configuration by configurations.creating
+val antJavaCard: Configuration by configurations.creating
 val cap = project(":applet").layout.buildDirectory.file("cap/qntx-card.cap")
+val jcKitDir = rootProject.layout.projectDirectory.dir("sdks/${libs.versions.javacard.sdk.get()}")
 val apiClassicJar =
-    rootProject.layout.projectDirectory.file(
-        "sdks/${libs.versions.javacard.sdk.get()}/lib/api_classic-${libs.versions.javacard.target.get()}.jar",
-    )
+    jcKitDir.file("lib/api_classic-${libs.versions.javacard.target.get()}.jar")
 val vectorGen: SourceSet by sourceSets.creating {
     java.srcDir(rootProject.layout.projectDirectory.dir("spec/vectors/gen/java"))
+}
+val admission: SourceSet by sourceSets.creating {
+    java.srcDir("src/admission/java")
+}
+val realCard: SourceSet by sourceSets.creating {
+    java.srcDir("src/realCard/java")
 }
 
 dependencies {
     agent(project(path = ":sim", configuration = "agent"))
+    antJavaCard(libs.ant.javacard)
     testImplementation(project(":sim"))
     testCompileOnly(files(apiClassicJar))
     testImplementation(project(":applet"))
@@ -27,13 +34,124 @@ dependencies {
     testImplementation(libs.jackson.jr)
     testRuntimeOnly(libs.junit.platform.launcher)
     "vectorGenImplementation"(libs.bouncycastle.prov)
+    "admissionCompileOnly"(files(apiClassicJar))
+    "realCardImplementation"(project(":host"))
+    "realCardImplementation"(project(":sim"))
+    "realCardImplementation"(project(":applet"))
+    "realCardImplementation"(libs.bouncycastle.prov)
+    "realCardImplementation"(platform(libs.junit.bom))
+    "realCardImplementation"(libs.junit.jupiter)
+    "realCardRuntimeOnly"(libs.junit.platform.launcher)
+    "realCardImplementation"(admission.output)
+    "realCardCompileOnly"(files(apiClassicJar))
 }
+
+tasks.named<JavaCompile>("compileAdmissionJava") {
+    options.release = 8
+    options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-options", "-Werror"))
+}
+
+val admissionCapFile = layout.buildDirectory.file("cap/admission.cap")
+
+/**
+ * Test-only admission CAP of the real-card suite (architecture §10): package {@code F0716E7478FF}
+ * with the probe applets {@code F0716E7478FF01} and {@code F0716E7478FF02}. Never part of a release
+ * artifact.
+ */
+val admissionCap by tasks.registering {
+    group = "build"
+    description = "Converts the admission probe package into tests/build/cap/admission.cap."
+    val sources = layout.projectDirectory.dir("src/admission/java")
+    val kit = jcKitDir.asFile
+    val antClasspath = antJavaCard
+    inputs.files(antClasspath).withPropertyName("antJavaCard")
+    inputs.dir(sources).withPropertyName("sources")
+    inputs.dir(jcKitDir).withPropertyName("jckit")
+    outputs.file(admissionCapFile)
+    dependsOn("compileAdmissionJava")
+    doLast {
+        val out = admissionCapFile.get().asFile
+        out.parentFile.mkdirs()
+        check(kit.isDirectory) { "JavaCard SDK missing at $kit: run `git submodule update --init`" }
+        CapBuild.convertCap(
+            ant,
+            antClasspath.asPath,
+            kit,
+            out,
+            "F0716E7478FF",
+            "org.qntx.card.admission",
+            libs.versions.javacard.target
+                .get(),
+            sources.asFile,
+            listOf(
+                "org.qntx.card.admission.Probe" to "F0716E7478FF01",
+                "org.qntx.card.admission.Probe2" to "F0716E7478FF02",
+            ),
+        )
+        CapBuild.normalizeCap(out)
+    }
+}
+
+// The real-card suite of architecture §10: never in CI and never run by `check`. Without
+// -PrealCard=<reader> every test is skipped as "not run"; -PrealCard=sim runs the suite
+// in-process on the simulator as a self-check, not hardware evidence.
+tasks.register<Test>("realCard") {
+    group = "verification"
+    description = "Runs the architecture §10 real-card suite; needs -PrealCard=<reader> or sim."
+    testClassesDirs = realCard.output.classesDirs
+    classpath = realCard.runtimeClasspath
+    useJUnitPlatform()
+    inputs.files(agent).withPropertyName("agent")
+    // the admission probe lives in org.qntx.card.admission: both packages need the write-point
+    // instrumentation for transaction journaling and tear accounting
+    jvmArgumentProviders.add {
+        listOf("-javaagent:${agent.singleFile.absolutePath}=org/qntx/card,org/qntx/card/admission")
+    }
+    for (
+    name in
+    listOf(
+        "realCard",
+        "realCardPeer",
+        "realCardContactless",
+        "realCardTear",
+        "realCardSacrificial",
+    )
+    ) {
+        providers.gradleProperty(name).orNull?.let { systemProperty(name, it) }
+    }
+    systemProperty(
+        "qntx.reports",
+        layout.buildDirectory
+            .dir("reports")
+            .get()
+            .asFile.absolutePath,
+    )
+    testLogging {
+        events(
+            org.gradle.api.tasks.testing.logging.TestLogEvent.PASSED,
+            org.gradle.api.tasks.testing.logging.TestLogEvent.SKIPPED,
+            org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED,
+        )
+        showStandardStreams = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+}
+
+tasks.check { dependsOn(admissionCap, "compileRealCardJava") }
 
 tasks.test {
     useJUnitPlatform()
-    dependsOn(":applet:cap")
+    dependsOn(":applet:cap", ":sim:shadowJar")
     inputs.file(cap).withPropertyName("cap")
     inputs.files(agent).withPropertyName("agent")
+    systemProperty(
+        "qntx.simJar",
+        project(":sim")
+            .layout.buildDirectory
+            .file("libs/card-sim.jar")
+            .get()
+            .asFile.absolutePath,
+    )
     jvmArgumentProviders.add { listOf("-javaagent:${agent.singleFile.absolutePath}") }
     systemProperty("qntx.cap", cap.get().asFile.absolutePath)
     systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
@@ -125,7 +243,10 @@ pitest {
         listOf(
             // covered paths are killed by the vector and command suites; it would
             // multiply the run
-            "SignDifferentialTest",
+            "org.qntx.card.SignDifferentialTest",
+            // drives the separately built card-sim.jar in a child JVM, whose applet classes
+            // PIT never mutates, so it cannot kill any mutant and only costs time
+            "org.qntx.card.tests.ServerTest",
         )
     mutators = listOf("STRONGER")
     excludedMethods =

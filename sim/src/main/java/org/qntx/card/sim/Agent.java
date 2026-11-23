@@ -65,6 +65,14 @@ public final class Agent {
         installed = true;
     }
 
+    /**
+     * {@code Launcher-Agent-Class} entry of {@code card-sim.jar}: identical to {@link #premain},
+     * which defaults to the applet package when the JVM passes no arguments.
+     */
+    public static void agentmain(String args, Instrumentation inst) {
+        premain(args, inst);
+    }
+
     /** True once {@link #premain} ran; {@link Card} refuses to work without it. */
     public static boolean installed() {
         return installed;

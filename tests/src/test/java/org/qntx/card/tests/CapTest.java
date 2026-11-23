@@ -32,10 +32,12 @@ final class CapTest {
     }
 
     @Test
-    void appletComponentListsOnlyTheWalletApplet() throws IOException {
+    void appletComponentListsWalletAndNdefApplets() throws IOException {
         ByteBuffer applets = component("Applet.cap", APPLET_TAG);
-        assertEquals(1, applets.get());
+        assertEquals(2, applets.get());
         assertArrayEquals(Spec.WALLET_AID, aid(applets));
+        applets.getShort();
+        assertArrayEquals(Spec.NDEF_APPLET_AID, aid(applets));
         applets.getShort();
         assertEquals(0, applets.remaining());
     }

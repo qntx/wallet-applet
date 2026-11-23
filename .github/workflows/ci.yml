@@ -76,10 +76,22 @@ jobs:
             cat tests/build/reports/memory.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Reproducible card-sim
+        run: |
+          first=$(sha256sum sim/build/libs/card-sim.jar | cut -d' ' -f1)
+          ./gradlew :sim:shadowJar --rerun-tasks --no-build-cache
+          second=$(sha256sum sim/build/libs/card-sim.jar | cut -d' ' -f1)
+          echo "first  $first"; echo "second $second"
+          test "$first" = "$second"
+          echo "- card-sim.jar: $(stat -c %s sim/build/libs/card-sim.jar) B, sha256 \`$second\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Mutation tests
         run: ./gradlew :tests:pitest
       - name: SBOM
-        run: ./gradlew :applet:cyclonedxDirectBom
+        run: ./gradlew cyclonedxBom
+      - name: Distributables
+        run: |
+          ./gradlew dist
+          cd build/dist && sha256sum -c SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -90,6 +102,7 @@ jobs:
             tests/build/differential/signatures.json
             tests/build/reports/
             sim/build/reports/
+            build/dist/
           if-no-files-found: warn
           retention-days: 14
 

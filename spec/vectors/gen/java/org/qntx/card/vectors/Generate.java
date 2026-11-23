@@ -27,7 +27,8 @@ public final class Generate {
                     Map.entry("ecdsa.json", (Document) EcdsaDoc::document),
                     Map.entry("bip340.json", (Document) Bip340Doc::document),
                     Map.entry("ed25519.json", (Document) Ed25519Doc::document),
-                    Map.entry("transfer.json", (Document) TransferDoc::document));
+                    Map.entry("transfer.json", (Document) TransferDoc::document),
+                    Map.entry("ndef.json", (Document) NdefDoc::document));
 
     private Generate() {}
 

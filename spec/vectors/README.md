@@ -27,7 +27,7 @@ must produce identical bytes: `gen/java` (BouncyCastle) and `gen/ts` (noble). Th
 | `ed25519.json` | 10.4, 12.3 | RFC 8032; noble `ed25519`; libsodium | `sign` | yes |
 | `apdu.json` | 9, 13, 14 | Generated from the protocol tables by `gen/apdu.py` | `core`, extended by every later stage for its commands | yes |
 | `verify-sequence.json` | 7.3, 9.3, 9.5, 9.15 | Generated from §9 by `gen/sequence.py`; the OFFER/IMPORT sequences of §18 land with stage `sets` | `wallet` | yes |
-| `ndef.json` | 15 | NFC Forum T4T 2.0 §5 by hand | `release` | not yet |
+| `ndef.json` | 15 | NFC Forum T4T 2.0 §5 by hand | `release` | yes |
 
 The stage column is the implementation stage of `qntx/wallet-applet` that adds the file to both
 generators (the stage owning the sections it covers).

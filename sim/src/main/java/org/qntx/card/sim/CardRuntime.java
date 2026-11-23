@@ -7,6 +7,7 @@ import com.licel.jcardsim.crypto.ByteContainer;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -86,12 +87,24 @@ public final class CardRuntime extends SimulatorRuntime {
         return getApplet(aid);
     }
 
+    /**
+     * Deselects the currently selected applet the way the platform does on a SELECT of something
+     * else: {@code Applet.deselect()}, an open transaction aborted, CLEAR_ON_DESELECT transient
+     * memory cleared ({@code SimulatorRuntime.deselect}).
+     */
+    void deselectCurrent() {
+        if (getAID() != null) {
+            deselect(lookupApplet(getAID()));
+        }
+        currentAID = null;
+    }
+
     void startCommand() {
         writes = 0;
         commits.clear();
-        java.util.Arrays.fill(digestCalls, 0);
-        java.util.Arrays.fill(digestBytes, 0);
-        java.util.Arrays.fill(digestResets, 0);
+        Arrays.fill(digestCalls, 0);
+        Arrays.fill(digestBytes, 0);
+        Arrays.fill(digestResets, 0);
         // lastCommitBytes intentionally survives: it reports the last
         // transaction's commit-buffer consumption until the next one ends
         bind(Phase.COMMAND);
@@ -537,6 +550,6 @@ public final class CardRuntime extends SimulatorRuntime {
     /** A copy of the simulator's shared APDU buffer as the last command left it. */
     byte[] apduBuffer() {
         byte[] buffer = getCurrentAPDU().getBuffer();
-        return java.util.Arrays.copyOf(buffer, buffer.length);
+        return Arrays.copyOf(buffer, buffer.length);
     }
 }
