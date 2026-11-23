@@ -327,9 +327,10 @@ final class TimingRealCardTest {
         Map<String, Object> json = new LinkedHashMap<>();
         boolean waitChecked = false;
         for (Row r : ROWS) {
-            // FIRST_SELECT is report-only: on the lazy test build it pays the deferred
-            // constructor that production pays inside install — not a §16.6 command row
-            boolean bound = !r.name().equals("FIRST_SELECT");
+            // report-only rows: FIRST_SELECT pays the lazy build's deferred construction
+            // (production pays it inside install), and a streamed total is the host-side
+            // sum of several commands — §16.6's 1,500 ms bound is per command
+            boolean bound = !r.name().equals("FIRST_SELECT") && !r.name().contains(" total ");
             md.append(
                     String.format(
                             "| %s | %d | %.1f | %.1f | %.1f | %.1f | %s | %s |\n",
@@ -357,8 +358,9 @@ final class TimingRealCardTest {
                 com.fasterxml.jackson.jr.ob.JSON.std.asString(json));
         Files.writeString(Fixture.out().resolve("timing.md"), md.toString());
         for (Row r : ROWS) {
-            if (r.name().equals("FIRST_SELECT")) {
-                continue; // report-only row (deferred construction), no §16.6 bound
+            // same report-only rows as the markdown table: no per-command §16.6 bound
+            if (r.name().equals("FIRST_SELECT") || r.name().contains(" total ")) {
+                continue;
             }
             assertTrue(r.max() <= 1500, r.name() + " max " + r.max() + " ms > 1500");
             if (r.name().equals("WAIT")) {
