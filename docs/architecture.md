@@ -380,9 +380,10 @@ deviation table:
    setters, `setW`/`genKeyPair`) count against the same 5,120 B — card A's install journal —
    and install throws `TransactionException` `BUFFER_FULL` beyond it; nothing is journaled for
    rollback (a failed install is discarded whole). The charge is exposed as
-   `Card.installBytes()`; the real-card suite records `getAvailableMemory(PERSISTENT)` at
-   install start and end and after §4.3 initialisation (`qntx-install.json`, §10). Allocations
-   (`buildKey`, `new`, `makeTransient*`, `getInstance`) charge the single constant
+   `Card.installBytes()`; `InstallJournalTest` asserts both applets ≤ 3,072 B and that a
+   test-only applet replaying the pre-F1 constructor fails with `BUFFER_FULL`, while the
+   real-card suite measures the charge with the memprobe (`install-journal.json`, §10).
+   Allocations (`buildKey`, `new`, `makeTransient*`, `getInstance`) charge the single constant
    `INSTALL_ALLOC_CHARGE`, 0 until the card handoff measures whether JCOP charges allocations.
    `<clinit>` is not woven (patch 5's agent skips it): the constants it fills are CAP-loaded
    bytes, not runtime persistent writes.
@@ -484,7 +485,7 @@ card of `REALCARD.md`, never a production batch.
 | §3 item 7 — keys in transactions | `AdmissionRealCardTest` (`persistentKeySettersJoinAndAbortTransactions`) | probe `0x21`: `setKey`/`setS`/`setW`/`setExponent`/`genKeyPair` abort back to the previous value and commit persistently |
 | §3 item 8 — commit capacity | `AdmissionRealCardTest` (`platformEnginesAndCommitCapacity`), `MemoryRealCardTest` | probe `0x50` capscan reports `getMaxCommitCapacity`/`getUnusedCommitCapacity` (`commit-capacity.json`); memprobe `80 FE` reports `max − unused` before every commit of each named transaction — each ≤ 50 % (`memory.json`) |
 | §3 item 9 — WAIT unit | `TimingRealCardTest` | WAIT median of 20 runs ∈ [0.9, 1.1] s (`timing.json`, `timing.md`) |
-| §14.3 install, §4.3 init, §8.5 epochs | `InstallRealCardTest` | production CAP installs (registry = baseline + load file + instance); `GET_IDENTITY` polls return `6283` until `INIT_DONE` (bound 16, each ≤ 500 ms per §16.6, `init.json`); every other outer command answers `6283`; the memprobe twin reports the install journal charge ≤ 5,120 B (`install-journal.json`); personalise, then `OPEN` ×3 across re-SELECTs and once across a power cycle; `qntx-card.cap` contains no `MemProbe` |
+| §14.3 install, §4.3 init, §8.5 epochs | `InstallRealCardTest` | production CAP installs (registry = baseline + load file + instance); `GET_IDENTITY` polls return `6283` until `INIT_DONE` (bound 16, each ≤ 500 ms per §16.6, `init.json`); every other outer command answers `6283`; the memprobe twin reports the install journal charge ≤ 60 % of the commit capacity (`install-journal.json`); personalise, then `OPEN` ×3 across re-SELECTs and once across a power cycle; `qntx-card.cap` contains no `MemProbe` |
 | §16.6 command timing | `TimingRealCardTest` | every named command, 20 runs, host-clock median/max vs the B2 basis; every command ≤ 1,500 ms (`timing.json`, `timing.md`) |
 | §3 APDU `Lc = 248` | `SignRealCardTest` (`ed25519ChunkBoundaries`) | a 236-byte inner chunk is the largest record that fits `Lc = 248`; maximal updates + empty finish verify |
 | §9.5/§9.6 wallet | `WalletRealCardTest` | lifecycle and the failure-limit story (~110 real WAITs, run once); derivation vectors of `derivation.json` |

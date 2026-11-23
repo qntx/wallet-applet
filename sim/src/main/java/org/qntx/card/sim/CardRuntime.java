@@ -73,8 +73,9 @@ public final class CardRuntime extends SimulatorRuntime {
     private final int[] digestResets = new int[64];
 
     /**
-     * Per-allocation charge of the install journal: card A does not charge allocations, so the
-     * constant stands at 0 until the card handoff measures otherwise (architecture §8 patch 2).
+     * Per-allocation charge of the install journal: 0 until calibrated against the memprobe
+     * measurement on card A (architecture §8 patch 2) — whether card A charges allocations is
+     * unverified until that run.
      */
     static final int INSTALL_ALLOC_CHARGE = 0;
 
