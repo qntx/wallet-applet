@@ -26,6 +26,16 @@ application {
     applicationName = "qntx-card"
 }
 
+distributions {
+    main {
+        contents {
+            // licence trail at the distribution root, next to bin/ and lib/
+            from(rootProject.file("LICENSE"))
+            from(rootProject.file("LICENSES")) { into("LICENSES") }
+        }
+    }
+}
+
 tasks.test {
     useJUnitPlatform()
     dependsOn(":applet:cap", ":sim:shadowJar")

@@ -243,7 +243,10 @@ pitest {
         listOf(
             // covered paths are killed by the vector and command suites; it would
             // multiply the run
-            "SignDifferentialTest",
+            "org.qntx.card.SignDifferentialTest",
+            // drives the separately built card-sim.jar in a child JVM, whose applet classes
+            // PIT never mutates, so it cannot kill any mutant and only costs time
+            "org.qntx.card.tests.ServerTest",
         )
     mutators = listOf("STRONGER")
     excludedMethods =

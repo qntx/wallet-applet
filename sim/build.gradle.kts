@@ -124,6 +124,15 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
         )
     }
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/*.EC")
+    // licence trail inside the jar: the repo AGPL LICENSE, the Apache-2.0 text the vendored
+    // jcardsim fork is under, and its NOTICE (Apache-2.0 §4d); no dependency ships a
+    // META-INF/LICENSE or NOTICE that would collide with these paths
+    from(rootProject.file("LICENSE")) { into("META-INF") }
+    from(rootProject.file("LICENSES")) {
+        include("Apache-2.0.txt")
+        into("META-INF/LICENSES")
+    }
+    from("jcardsim/NOTICE") { into("META-INF") }
 }
 
 configurations.create("agent") {
