@@ -189,7 +189,7 @@ estimate where nothing measures it.
 
 | Class | Transient (`CLEAR_ON_DESELECT`) | Persistent (objects and arrays) |
 | --- | --- | --- |
-| `Session` | 4 AES transient keys 128; counter, `verified`, `waited`, stream/export/import state words 10 → **138** | key headers 160 |
+| `Session` | 4 AES transient keys 128; record engines: 3 AES-CBC 144, 2 CMAC 64; counter, `verified`, `waited`, stream/export/import state words 10 → **346** | key headers 160; engine objects 500 |
 | `State` | — | `state` 274 (§4) |
 | `Wallet` | session seed 64; wrap keys `K_enc`, `K_mac` 2 × 32 (in `Mem`) → **128** | `wrapKey` 72 |
 | `Derivation` | secp256k1 cache 170 (parent key uncompressed); ed25519 cache 105; working node 101; HMAC pad 192 → **568** | — |
@@ -202,7 +202,7 @@ estimate where nothing measures it.
 | `Ecdsa` | — | 4 rotating verify keys 1,520 (§5.4) |
 | `Mem` (shared engines) | AES-CBC 48; CMAC 32; SHA-256 128; SHA-512 208 → **416** | engine objects 400 |
 | `NdefApplet` | selected file 2 | CC + message ≤ 117 |
-| **Total** | **2,568** of 3,990 → margin 1,422 B (36 %) | **≈ 6.6 KB** + CAP 26,860 B load components (the `qntx-card.cap` file is 129,684 B) of 157,524 B |
+| **Total** | **2,776** of 3,990 → margin 1,214 B (30 %) | **≈ 7.1 KB** + CAP 27,643 B load components (the `qntx-card.cap` file is 132,813 B) of 157,524 B |
 
 Budget rule (acceptance): transient total ≤ 3,390 B (15 % margin on the 3,990 B JCAlgTest
 pool) as reported by the simulator's memory accounting (§8) and, on real cards, by

@@ -260,11 +260,11 @@ qntx-card personalise --sim 127.0.0.1:35963 --scp 03 --baseline baseline.txt \
 
 Measured on this tree (architecture §14.7 R6; the CI build job reports them again):
 
-- **CAP**: `qntx-card.cap` is 132,086 B; the load-file components inside it
-  (`org/qntx/card/javacard/*.cap`) total 27,458 B.
-- **Transient**: the simulator's memory report ends `total 2568 / 3990 (budget 3390)` — 2,568 B
+- **CAP**: `qntx-card.cap` is 132,813 B; the load-file components inside it
+  (`org/qntx/card/javacard/*.cap`) total 27,643 B.
+- **Transient**: the simulator's memory report ends `total 2776 / 3990 (budget 3390)` — 2,776 B
   of the 3,990 B JCAlgTest pool, inside the §5.1 acceptance budget of 3,390 B.
-- **Persistent**: ≈ 6.6 KB of objects and arrays plus the ≈ 27 KB CAP against the 157,524 B
+- **Persistent**: ≈ 7.1 KB of objects and arrays plus the ≈ 28 KB CAP against the 157,524 B
   J3R180 NVM (architecture §5.1). That is the architecture estimate — the simulator accounts
   transient bytes only, so it is not re-measured here.
 - **Card time** (protocol §16.6, computed from unit costs measured on development card A; full

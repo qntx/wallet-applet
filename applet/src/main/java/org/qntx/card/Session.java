@@ -16,9 +16,9 @@ import javacardx.crypto.Cipher;
 /**
  * The §8 secure session: OPEN (§8.1), the command/response records (§8.3–8.4), teardown (§8.5) and
  * the coded session flags (§16.2 item 1). All state is transient: four AES keys in {@code
- * CLEAR_ON_DESELECT} objects and one {@code byte[10]} holding the five 16-bit words {@code open},
- * {@code verified}, {@code ctr}, {@code pending} and {@code waited} (the plain WAIT counter of
- * §9.15, the only uncoded word).
+ * CLEAR_ON_DESELECT} objects, the five record engines re-armed per session and one {@code byte[10]}
+ * holding the five 16-bit words {@code open}, {@code verified}, {@code ctr}, {@code pending} and
+ * {@code waited} (the plain WAIT counter of §9.15, the only uncoded word).
  */
 final class Session {
     /** Offsets of the 16-bit words inside {@link #words}. */
@@ -59,6 +59,20 @@ final class Session {
     private final AESKey kcm;
     private final AESKey kre;
     private final AESKey krm;
+
+    /**
+     * The record layer's own engines (§8.3–8.4): {@code ceEnc}/{@code ceDec} on {@code kce}, {@code
+     * reEnc} on {@code kre} and the CMACs {@code cm}/{@code rm}. {@link #initEngines} sets them up
+     * once per session in {@link #open} and once per teardown with the zeroed keys — {@code
+     * Cipher.doFinal}/{@code Signature.sign} reset an engine to its initialised state, so a record
+     * costs no {@code init} at all (architecture §5.1).
+     */
+    private final Cipher ceEnc;
+
+    private final Cipher ceDec;
+    private final Cipher reEnc;
+    private final Signature cm;
+    private final Signature rm;
     private final byte[] words;
 
     Session(Mem mem, State state, Secp256k1 secp, Identity identity) {
@@ -70,6 +84,11 @@ final class Session {
         kcm = aesKey();
         kre = aesKey();
         krm = aesKey();
+        ceEnc = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
+        ceDec = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
+        reEnc = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
+        cm = Signature.getInstance(Signature.ALG_AES_CMAC_128, false);
+        rm = Signature.getInstance(Signature.ALG_AES_CMAC_128, false);
         words = JCSystem.makeTransientByteArray((short) 10, JCSystem.CLEAR_ON_DESELECT);
     }
 
@@ -77,6 +96,15 @@ final class Session {
         return (AESKey)
                 KeyBuilder.buildKey(
                         KeyBuilder.TYPE_AES_TRANSIENT_DESELECT, KeyBuilder.LENGTH_AES_128, false);
+    }
+
+    /** Initialises the five record engines on whatever the four session keys currently hold. */
+    private void initEngines() {
+        ceEnc.init(kce, Cipher.MODE_ENCRYPT);
+        ceDec.init(kce, Cipher.MODE_DECRYPT);
+        reEnc.init(kre, Cipher.MODE_ENCRYPT);
+        cm.init(kcm, Signature.MODE_SIGN);
+        rm.init(krm, Signature.MODE_SIGN);
     }
 
     /**
@@ -137,6 +165,7 @@ final class Session {
         kcm.setKey(w, (short) (W_KEYS + 16));
         kre.setKey(w, (short) (W_KEYS + 32));
         krm.setKey(w, (short) (W_KEYS + 48));
+        initEngines();
         setWord(O_OPEN, Const.SESSION_OPEN);
         state.cert(buf, (short) (Const.POINT_LEN + 64));
         // §8.1: x, Z and the KDF output in Mem.W are wiped by process() before the response
@@ -163,10 +192,9 @@ final class Session {
         short ctLen = (short) (lc - 8);
         // tag = CMAC(K_cm, u16(ctr) ‖ ct)[0..8), compared in constant time
         Util.setShort(w, W_CTR, getWord(O_CTR));
-        mem.cmac.init(kcm, Signature.MODE_SIGN);
-        mem.cmac.update(w, W_CTR, (short) 2);
-        mem.cmac.update(buf, ISO7816.OFFSET_CDATA, ctLen);
-        mem.cmac.sign(w, (short) 0, (short) 0, w, W_TAG);
+        cm.update(w, W_CTR, (short) 2);
+        cm.update(buf, ISO7816.OFFSET_CDATA, ctLen);
+        cm.sign(w, (short) 0, (short) 0, w, W_TAG);
         // the guarded check, evaluated twice, immediately before decryption (§16.2 item 4)
         short t1 = Bytes.equal(w, W_TAG, buf, (short) (ISO7816.OFFSET_CDATA + ctLen), (short) 8);
         if (t1 != Const.CHECK_OK) {
@@ -176,12 +204,14 @@ final class Session {
         if (t2 != Const.CHECK_OK) {
             tearThrow(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
         }
-        // IV = AES(K_ce, 0x01 ‖ 0¹³ ‖ u16(ctr)): one CBC block with a zero IV
+        // IV = AES(K_ce, 0x01 ‖ 0¹³ ‖ u16(ctr)): one CBC block with a zero IV; ceDec
+        // runs zero-IV too, so the first plaintext block is corrected by xoring the IV
         initIv(w, (byte) 0x01);
-        mem.aesCbc.init(kce, Cipher.MODE_ENCRYPT);
-        mem.aesCbc.doFinal(w, W_IVSEED, (short) 16, w, W_IV);
-        mem.aesCbc.init(kce, Cipher.MODE_DECRYPT, w, W_IV, (short) 16);
-        mem.aesCbc.doFinal(buf, ISO7816.OFFSET_CDATA, ctLen, buf, ISO7816.OFFSET_CDATA);
+        ceEnc.doFinal(w, W_IVSEED, (short) 16, w, W_IV);
+        ceDec.doFinal(buf, ISO7816.OFFSET_CDATA, ctLen, buf, ISO7816.OFFSET_CDATA);
+        for (short i = 15; i >= 0; i--) {
+            buf[(short) (ISO7816.OFFSET_CDATA + i)] ^= w[(short) (W_IV + i)];
+        }
         short plen = Bytes.unpad(buf, ISO7816.OFFSET_CDATA, ctLen);
         if (plen < 0) {
             Bytes.wipe(buf, ISO7816.OFFSET_CDATA, ctLen);
@@ -200,16 +230,17 @@ final class Session {
         byte[] w = mem.W;
         Util.setShort(buf, dataLen, sw);
         short plen = Bytes.pad(buf, (short) 0, (short) (dataLen + 2));
+        // zero-IV CBC over the first-block-xored plaintext is CBC with the IV of §8.4
         initIv(w, (byte) 0x02);
-        mem.aesCbc.init(kre, Cipher.MODE_ENCRYPT);
-        mem.aesCbc.doFinal(w, W_IVSEED, (short) 16, w, W_IV);
-        mem.aesCbc.init(kre, Cipher.MODE_ENCRYPT, w, W_IV, (short) 16);
-        mem.aesCbc.doFinal(buf, (short) 0, plen, buf, (short) 0);
+        reEnc.doFinal(w, W_IVSEED, (short) 16, w, W_IV);
+        for (short i = 15; i >= 0; i--) {
+            buf[i] ^= w[(short) (W_IV + i)];
+        }
+        reEnc.doFinal(buf, (short) 0, plen, buf, (short) 0);
         Util.setShort(w, W_CTR, getWord(O_CTR));
-        mem.cmac.init(krm, Signature.MODE_SIGN);
-        mem.cmac.update(w, W_CTR, (short) 2);
-        mem.cmac.update(buf, (short) 0, plen);
-        mem.cmac.sign(w, (short) 0, (short) 0, w, W_TAG);
+        rm.update(w, W_CTR, (short) 2);
+        rm.update(buf, (short) 0, plen);
+        rm.sign(w, (short) 0, (short) 0, w, W_TAG);
         Util.arrayCopyNonAtomic(w, W_TAG, buf, plen, (short) 8);
         short used = (short) (plen + 8);
         Bytes.wipe(buf, used, (short) (buf.length - used));
@@ -231,10 +262,14 @@ final class Session {
     /**
      * §8.5: wipes, in spec order, the {@code verified} flag, the session seed, the derivation
      * caches, the pending state, {@code waited}, the four session keys (overwritten, never {@code
-     * clearKey}; architecture §4), {@code ctr} and the open flag. Idempotent; also runs in {@code
-     * select()} and OPEN without relying on deselection.
+     * clearKey}; architecture §4), {@code ctr} and the open flag. If a session was open, {@link
+     * #initEngines} then re-arms the record engines on the zeroed keys so no engine keeps a
+     * session-key schedule past the session (§16.3); a teardown with nothing to tear down (e.g. a
+     * bare SELECT) skips it. Idempotent; also runs in {@code select()} and OPEN without relying on
+     * deselection.
      */
     void teardown() {
+        short wasOpen = getWord(O_OPEN);
         setWord(O_VERIFIED, (short) 0);
         Bytes.wipe(mem.seed, (short) 0, (short) mem.seed.length);
         Bytes.wipe(mem.secpCache, (short) 0, (short) mem.secpCache.length);
@@ -248,6 +283,9 @@ final class Session {
         krm.setKey(Const.ZEROS, (short) 0);
         setWord(O_CTR, (short) 0);
         setWord(O_OPEN, (short) 0);
+        if (wasOpen == Const.SESSION_OPEN) {
+            initEngines();
+        }
     }
 
     /** Coded read of {@code verified}: {@code 0x0000} is the safe cleared state (§16.2 item 1). */
