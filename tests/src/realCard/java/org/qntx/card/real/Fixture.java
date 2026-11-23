@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Assumptions;
 import org.qntx.card.host.Certificates;
 import org.qntx.card.host.Open;
@@ -95,6 +97,21 @@ public final class Fixture {
      */
     public static int rngSequences() {
         return Integer.parseInt(System.getProperty("qntx.realcard.sequences", "80"));
+    }
+
+    /**
+     * Comma-separated probe P1 values {@link PrimitiveRealCardTest} runs (e.g. {@code "1,2,5"} for
+     * the AES-CBC-init and CMAC-init sanity rows); empty runs the whole primitive table.
+     */
+    public static Set<Integer> prims() {
+        String v = System.getProperty("qntx.realcard.prims", "");
+        Set<Integer> s = new HashSet<>();
+        for (String p : v.split(",")) {
+            if (!p.isBlank()) {
+                s.add(Integer.decode(p.trim()));
+            }
+        }
+        return s;
     }
 
     public static Path out() {

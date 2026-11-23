@@ -12,6 +12,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -166,12 +167,15 @@ final class PrimitiveRealCardTest {
                         new Prim(0x15, "arrayFillNonAtomic 256 B", null),
                         new Prim(0x16, "byte loop ×256", null));
 
+        Set<Integer> only = Fixture.prims();
+        List<Prim> selected =
+                prims.stream().filter(p -> only.isEmpty() || only.contains((int) p.p1())).toList();
         Map<String, Map<String, Object>> report = new LinkedHashMap<>();
         StringBuilder md =
                 new StringBuilder(
                         "| primitive | median dispatch ms | per-op ms (r = 4) | per-op ms (r = 16) |\n");
         md.append("| --- | --- | --- | --- |\n");
-        for (Prim prim : prims) {
+        for (Prim prim : selected) {
             Map<Integer, Double> med = new LinkedHashMap<>();
             for (int r : RS) {
                 List<Long> nanos = new ArrayList<>(RUNS);

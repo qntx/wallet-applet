@@ -237,6 +237,9 @@ tasks.register<Test>("realCard") {
     providers.gradleProperty("realCardSequences").orNull?.let {
         systemProperty("qntx.realcard.sequences", it)
     }
+    providers.gradleProperty("realCardPrims").orNull?.let {
+        systemProperty("qntx.realcard.prims", it)
+    }
     providers.gradleProperty("realCardKeep").orNull?.let {
         systemProperty("qntx.realcard.keep", "true")
     }
