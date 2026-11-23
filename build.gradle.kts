@@ -124,7 +124,8 @@ val vectorsZip by tasks.registering(Zip::class) {
 // runtimeClasspath of each project is scanned — released software carries no test-scope or
 // build-tool dependency — which also keeps the output deterministic: the plugin's
 // cdx:maven:package:test flag otherwise flips run to run. The plugin still writes a fresh
-// metadata.timestamp (no option to disable); the random serialNumber is configured off.
+// metadata.timestamp (no option to disable; the task pins it, below); the random serialNumber
+// is configured off.
 subprojects {
     tasks.withType<org.cyclonedx.gradle.CyclonedxDirectTask>().configureEach {
         includeConfigs.set(listOf("runtimeClasspath"))
@@ -134,6 +135,25 @@ tasks.cyclonedxBom {
     includeBomSerialNumber.set(false)
     jsonOutput.set(layout.buildDirectory.file("reports/qntx-card.cdx.json"))
     xmlOutput.unsetConvention()
+    // metadata.timestamp has no plugin option: pin it to SOURCE_DATE_EPOCH (Unix epoch when
+    // unset) so the SBOM, and with it the dist SHA256SUMS, reproduces byte for byte.
+    doLast {
+        val stamp =
+            providers.environmentVariable("SOURCE_DATE_EPOCH").orNull?.toLongOrNull()?.let {
+                java.time.Instant
+                    .ofEpochSecond(it)
+                    .toString()
+            } ?: "1970-01-01T00:00:00Z"
+        val file = jsonOutput.get().asFile
+        file.writeText(
+            file
+                .readText()
+                .replaceFirst(
+                    Regex("\"timestamp\"\\s*:\\s*\"[^\"]+\""),
+                    "\"timestamp\" : \"$stamp\"",
+                ),
+        )
+    }
 }
 
 val dist by tasks.registering {
