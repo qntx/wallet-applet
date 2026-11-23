@@ -171,7 +171,7 @@ final class AdmissionRealCardTest {
         // capscan 10–14: the session-layer primitives the wallet actually runs —
         // SHA-256 (KDF), SHA-512 (Ed25519), AES-CBC-NOPAD and AES-CMAC-128 (session
         // records) on a TRANSIENT_DESELECT key, and getW (the OPEN response)
-        byte[] in16 = new byte[16];
+        byte[] in16 = new byte[32];
         RND.nextBytes(in16);
         assertArrayEquals(
                 MessageDigest.getInstance("SHA-256").digest(in16),
@@ -196,13 +196,18 @@ final class AdmissionRealCardTest {
         assertArrayEquals(aes.doFinal(block16), ok(0x50, 12, kb), "capscan AES-CBC");
         CMac cmac = new CMac(AESEngine.newInstance());
         cmac.init(new KeyParameter(key16));
-        cmac.update(block16, 0, 16);
+        byte[] msg32 = new byte[32];
+        RND.nextBytes(msg32);
+        cmac.update(msg32, 0, 32);
         byte[] tag = new byte[16];
         cmac.doFinal(tag, 0);
-        assertArrayEquals(tag, ok(0x50, 13, kb), "capscan AES-CMAC");
+        byte[] km = new byte[48];
+        System.arraycopy(key16, 0, km, 0, 16);
+        System.arraycopy(msg32, 0, km, 16, 32);
+        assertArrayEquals(tag, ok(0x50, 13, km), "capscan AES-CMAC");
         byte[] g = Arrays.copyOfRange(secpDomain(), 96, 161);
-        assertEquals(0x9000, sw(0x10, 0, secpDomain()), "domain for getW");
-        assertEquals(0x9000, sw(0x12, 0, g), "setW for getW");
+        assertEquals(0x9000, sw(0x10, 2, secpDomain()), "domain for getW");
+        assertEquals(0x9000, sw(0x12, 2, g), "setW for getW");
         assertArrayEquals(g, ok(0x50, 14, null), "capscan getW");
         byte[] commit = ok(0x50, 9, null);
         int maxCommit = ((commit[0] & 0xFF) << 8) | (commit[1] & 0xFF);

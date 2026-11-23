@@ -353,16 +353,18 @@ public final class AdmissionProbe extends Applet {
                 Util.setShort(buf, (short) 2, JCSystem.getUnusedCommitCapacity());
                 return 4;
             case 10:
-                // real hashing, not just getInstance: update + doFinal
+                // real hashing, not just getInstance: update + doFinal over a 32-byte message
                 MessageDigest d10 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
                 d10.reset();
                 d10.update(buf, ISO7816.OFFSET_CDATA, (short) 16);
-                return d10.doFinal(buf, ISO7816.OFFSET_CDATA, (short) 16, buf, (short) 0);
+                return d10.doFinal(
+                        buf, (short) (ISO7816.OFFSET_CDATA + 16), (short) 16, buf, (short) 0);
             case 11:
                 MessageDigest d11 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
                 d11.reset();
                 d11.update(buf, ISO7816.OFFSET_CDATA, (short) 16);
-                return d11.doFinal(buf, ISO7816.OFFSET_CDATA, (short) 16, buf, (short) 0);
+                return d11.doFinal(
+                        buf, (short) (ISO7816.OFFSET_CDATA + 16), (short) 16, buf, (short) 0);
             case 12:
                 // setKey + CBC encrypt on a TRANSIENT_DESELECT AES key (run case 5 first);
                 // data = key(16) ‖ block(16)
@@ -375,15 +377,16 @@ public final class AdmissionProbe extends Applet {
                 return c12.doFinal(
                         buf, (short) (ISO7816.OFFSET_CDATA + 16), (short) 16, buf, (short) 0);
             case 13:
-                // CMAC init + update + sign on the same transient AES key
-                if (capAes == null || lc < (short) 32) {
+                // CMAC init + update + sign on the same transient AES key;
+                // data = key(16) ‖ msg(32): update(16) + sign(16)
+                if (capAes == null || lc < (short) 48) {
                     ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
                 }
                 Signature s13 = Signature.getInstance(Signature.ALG_AES_CMAC_128, false);
                 s13.init(capAes, Signature.MODE_SIGN);
                 s13.update(buf, (short) (ISO7816.OFFSET_CDATA + 16), (short) 16);
                 return s13.sign(
-                        buf, (short) (ISO7816.OFFSET_CDATA + 16), (short) 16, buf, (short) 0);
+                        buf, (short) (ISO7816.OFFSET_CDATA + 32), (short) 16, buf, (short) 0);
             case 14:
                 // reading back a persistent EC public point (OPEN does this for the identity)
                 return ecPub[0].getW(buf, (short) 0);
