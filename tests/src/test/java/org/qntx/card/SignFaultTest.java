@@ -213,7 +213,7 @@ final class SignFaultTest {
             assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
             assertEquals(0x9000, inner(0x33, 1, stream).sw());
             Fault.countCalls();
-            assertEquals(0x9000, inner(0x33, 2, new byte[0]).sw());
+            assertEquals(0x9000, inner(0x33, 2, new byte[] {9}).sw());
             int count = Fault.calls(m);
             Fault.reset();
             int first = m.endsWith("addMod") ? count - 1 : 1;
@@ -222,7 +222,7 @@ final class SignFaultTest {
                 assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
                 assertEquals(0x9000, inner(0x33, 1, stream).sw());
                 Fault.armSkip(m, i);
-                assertNoOutput(inner(0x33, 2, new byte[0]));
+                assertNoOutput(inner(0x33, 2, new byte[] {9}));
             }
         }
         // a fault that rewrites stored state after A was computed is caught: corrupt one
@@ -336,21 +336,21 @@ final class SignFaultTest {
         verified();
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
         Fault.countCalls();
-        assertEquals(0x9000, inner(0x33, 2, new byte[0]).sw());
+        assertEquals(0x9000, inner(0x33, 2, new byte[] {9}).sw());
         int equals = Fault.calls("Bytes.equal");
         Fault.reset();
         for (int nth : new int[] {equals - 1, equals}) {
             verified();
             assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
             Fault.arm("Bytes.equal", nth, Const.CHECK_FAIL);
-            assertNoOutput(inner(0x33, 2, new byte[0]));
+            assertNoOutput(inner(0x33, 2, new byte[] {9}));
         }
         // and finish's two verified() reads are calls 2 and 3 (the dispatch gate is 1)
         for (int nth : new int[] {2, 3}) {
             verified();
             assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
             Fault.arm("Session.verified", nth, Const.VERIFIED_NO);
-            assertNoOutput(inner(0x33, 2, new byte[0]));
+            assertNoOutput(inner(0x33, 2, new byte[] {9}));
         }
     }
 
@@ -376,7 +376,7 @@ final class SignFaultTest {
         // was reset, not carried into the new nonce or challenge
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
         Fault.countCalls();
-        Response r = inner(0x33, 2, new byte[0]);
+        Response r = inner(0x33, 2, new byte[] {9});
         assertEquals(0x9000, r.sw());
         assertEquals(9, Fault.calls("Bytes.wipe"), "3 finish + 2 endPending + 4 scratch");
     }
@@ -437,7 +437,7 @@ final class SignFaultTest {
             w = Internals.words(applet());
             w[6] = (byte) (member >> 8);
             w[7] = (byte) member;
-            assertEquals(0x6985, inner(0x33, 2, new byte[0]).sw());
+            assertEquals(0x6985, inner(0x33, 2, new byte[] {9}).sw());
         }
     }
 }

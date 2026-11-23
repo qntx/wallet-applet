@@ -329,15 +329,15 @@ public final class WalletApplet extends Applet {
                 }
                 return;
             case Const.INS_SIGN_ED25519:
-                // §9.11: begin carries a path (1 + 4·depth), update a 1..236-byte
-                // chunk, finish a 0..236-byte tail; depth is checked by the
-                // command, length here only bounds it
+                // §9.11: begin carries a path (1 + 4·depth), update and finish a
+                // 1..236-byte chunk; depth is checked by the command, length here
+                // only bounds it
                 if (p1 == 0) {
                     // a body under one byte can't equal 1 + 4·depth ≥ 1
                     if (dataLen != (short) (1 + (buf[dataOff] & 0xFF) * 4)) {
                         ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
                     }
-                } else if (p1 == 1 && dataLen < 1) {
+                } else if (dataLen < 1) {
                     ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
                 }
                 // no upper bound to check: the record layer never delivers more

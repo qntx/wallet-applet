@@ -1037,6 +1037,14 @@
           "sw": "6700"
         },
         {
+          "name": "finish-length-empty",
+          "life": "LOADED",
+          "session": "verified",
+          "apdu": "330200",
+          "inner": true,
+          "sw": "6700"
+        },
+        {
           "name": "begin-unverified",
           "life": "LOADED",
           "session": "open",
@@ -1056,7 +1064,7 @@
           "name": "finish-unverified",
           "life": "LOADED",
           "session": "open",
-          "apdu": "330200",
+          "apdu": "330200aa",
           "inner": true,
           "sw": "6982"
         },
@@ -1072,7 +1080,7 @@
           "name": "finish-no-stream",
           "life": "LOADED",
           "session": "verified",
-          "apdu": "330200",
+          "apdu": "330200aa",
           "inner": true,
           "sw": "6985"
         },

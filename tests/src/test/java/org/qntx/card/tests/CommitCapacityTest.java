@@ -92,7 +92,7 @@ final class CommitCapacityTest {
         // the stream's update and finish commit nothing
         assertEquals(0x9000, Vecs.roundtrip(card, session, 0x33, 1, 0, new byte[] {1}).sw());
         assertEquals(0, card.commits().size(), "update commits nothing");
-        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x33, 2, 0, new byte[0]).sw());
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x33, 2, 0, new byte[] {1}).sw());
         assertEquals(0, card.commits().size(), "finish commits nothing");
     }
 

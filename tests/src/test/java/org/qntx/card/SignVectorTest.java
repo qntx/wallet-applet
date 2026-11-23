@@ -181,12 +181,12 @@ final class SignVectorTest {
         }
     }
 
-    /** Feeds {@code stream} in update chunks cycling {@code sizes} and finishes with the rest. */
+    /** Feeds {@code stream} in {@code sizes} update chunks; the last byte stays for finish. */
     private Response feedStream(byte[] stream, int... sizes) throws Exception {
         int off = 0;
         int i = 0;
         while (stream.length - off > 236 || i < sizes.length) {
-            int len = Math.min(i < sizes.length ? sizes[i++] : 236, stream.length - off);
+            int len = Math.min(i < sizes.length ? sizes[i++] : 236, stream.length - off - 1);
             if (len == 0) {
                 continue;
             }

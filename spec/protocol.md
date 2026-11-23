@@ -489,7 +489,7 @@ check at that position). The command sections give the effects.
 | `SIGN_BIP340` | `LOADED` | `00 00` | `65 + 4d` | required | — | `d ∈ [1, 10]`; every child valid; `int(tweak) < n`; tweaked key ≠ 0 |
 | `SIGN_ED25519` begin | `LOADED` | `P1 ∈ {00, 01, 02}`, `P2 = 00` | `1 + 4d` | required | `edCounter ≠ 0xFFFFFFFF` | `d ∈ [1, 10]`; all indices hardened |
 | `SIGN_ED25519` update | `LOADED` | as above | 1–236 | required | active stream | — |
-| `SIGN_ED25519` finish | `LOADED` | as above | 0–236 | required | active stream | — |
+| `SIGN_ED25519` finish | `LOADED` | as above | 1–236 | required | active stream | — |
 | `OFFER` | `BLANK`, `LOADED` | `00 00` | 0 | — | — | — |
 | `EXPORT` `P1 = 00` | `LOADED` | `P1 ∈ {00, 01}`, `P2 = 00` | 226 | required | — | `cert_T` under `caKey`; `A_T ≠ A`; `ID(A_T)` in `members`; `A_T` decompresses; `LK_T[0] = 04` and `sig_T`; `LK_T` a valid point |
 | `EXPORT` `P1 = 01` | `LOADED` | as above | 32 | required | pending export | — |
@@ -606,10 +606,12 @@ tweaked key returns `6A80`. Response: `R_x(32) ‖ s(32)` (§12.2).
 | --- | --- | --- | --- |
 | `0x00` | begin | `path` (ed25519) | `W(R)(64)` |
 | `0x01` | update | `chunk`, 1–236 bytes | empty |
-| `0x02` | finish | `chunk`, 0–236 bytes | `le32(S)(32)` |
+| `0x02` | finish | `chunk`, 1–236 bytes | `le32(S)(32)` |
 
 Requires verified. `P1 ∉ {0x00, 0x01, 0x02}` returns `6A86`. `update` and `finish` without an
-active stream return `6985`. `begin` with `edCounter = 0xFFFFFFFF` returns `6985`. `begin` with
+active stream return `6985`. An empty `update` or `finish` returns `6700`; the stream is at
+least 64 bytes long, so its last chunk is always sent with `finish`. `begin` with
+`edCounter = 0xFFFFFFFF` returns `6985`. `begin` with
 an active stream ends it and starts a new one. The chunks form the *stream*, the input of the
 RFC 8032 challenge hash; hosts MUST send `encode(R) ‖ encode(A) ‖ M`, where `encode(R)` is the host's
 encoding of the returned `W(R)` and `encode(A)` that of `PUBLIC_KEY` for `path` (§10.4). The card

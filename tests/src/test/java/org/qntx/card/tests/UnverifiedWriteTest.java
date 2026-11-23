@@ -62,7 +62,7 @@ final class UnverifiedWriteTest {
         assertEquals(0x6982, run(0x33, 0, Vecs.pathEdSolana()), "SIGN_ED25519 begin rejected");
         assertEquals(0, card.writes(), "begin writes nothing unverified");
         assertEquals(0x6982, run(0x33, 1, new byte[] {1}), "update rejected");
-        assertEquals(0x6982, run(0x33, 2, new byte[0]), "finish rejected");
+        assertEquals(0x6982, run(0x33, 2, new byte[] {1}), "finish rejected");
         assertEquals(0, card.writes());
 
         byte[] create = new byte[96];
