@@ -277,9 +277,13 @@ final class CoreRealCardTest {
         Fixture.require();
         Fixture.ensureBlank();
         RealCard card = Fixture.card();
-        // no session is open after SELECT: a SESSION record answers 6985 (§8.3)
+        // a session the previous test left open ends without a SELECT: a crypto-rejected
+        // OPEN tears it down (§8.5) — after that no session is open (§8.3 → 6985)
+        byte[] kill = Open.request(Vecs.RND).apdu();
+        kill[5 + 64] ^= 1;
+        assertEquals(0x6A80, RealCard.sw(card.transmit(kill)), "OPEN reject tears the session");
         byte[] record = unhex("80120000");
-        assertEquals(0x6985, RealCard.sw(card.transmit(record)));
+        assertEquals(0x6985, RealCard.sw(card.transmit(record)), "record without open session");
     }
 
     @Test

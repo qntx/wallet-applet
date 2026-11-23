@@ -279,7 +279,7 @@ public final class Fixture {
         }
         if (life == Life.LOADED) {
             Session s = open();
-            if (cmd(s, 0x22, 0, 0, Vecs.accessHash()).sw() != 0x9000) {
+            if (verifyWithWaits(s) != 0x9000) {
                 s.close();
                 throw new IllegalStateException("card holds a wallet we cannot erase — stopping");
             }
@@ -309,6 +309,25 @@ public final class Fixture {
     }
 
     /**
+     * VERIFY with the test access hash, absorbing a gated counter first: at f ≥ 3 the card demands
+     * W = 15 WAITs before every attempt (§9.5) — a bare VERIFY then answers 6985, which must not be
+     * misread as a wrong access code. Returns the inner SW.
+     */
+    private static int verifyWithWaits(Session s) throws Exception {
+        int sw = cmd(s, 0x22, 0, 0, Vecs.accessHash()).sw();
+        if (sw == 0x6985) {
+            for (int i = 0; i < 15; i++) {
+                int w = cmd(s, 0x25, 0, 0, new byte[0]).sw();
+                if (w != 0x9000) {
+                    return w; // WAIT refused — not a gated LOADED card (e.g. BLANK)
+                }
+            }
+            sw = cmd(s, 0x22, 0, 0, Vecs.accessHash()).sw();
+        }
+        return sw;
+    }
+
+    /**
      * LOADED with the imported test seed (§9.4 P1 = 1). Reuses an already-loaded test wallet —
      * VERIFY + the master public key proves it — instead of spending an ERASE + CREATE.
      */
@@ -316,22 +335,30 @@ public final class Fixture {
         ensureEpoch();
         if (life == Life.LOADED) {
             Session s = open();
-            if (cmd(s, 0x22, 0, 0, Vecs.accessHash()).sw() == 0x9000) {
+            if (verifyWithWaits(s) == 0x9000) {
                 Response r = cmd(s, 0x30, 0, 0, new byte[] {0});
                 if (r.sw() == 0x9000
                         && Arrays.equals(Arrays.copyOf(r.data(), 33), Vecs.seedMasterPublicKey())) {
                     s.close();
                     return;
                 }
-            }
-            s.close();
-            // a foreign wallet: erase under a verified session, then re-create
-            Session e = open();
-            if (cmd(e, 0x22, 0, 0, Vecs.accessHash()).sw() == 0x9000) {
-                assertEquals(0x9000, cmd(e, 0x24, 0, 0, new byte[0]).sw(), "ERASE");
+                // right access code, other seed: erase it on this verified session
+                assertEquals(0x9000, cmd(s, 0x24, 0, 0, new byte[0]).sw(), "ERASE");
+                s.close();
                 life = Life.BLANK;
             } else {
-                throw new IllegalStateException("card holds a wallet we cannot erase — stopping");
+                s.close();
+                // the access hash was refused: either the fixture's life flag is stale (the
+                // wallet is actually gone) or a foreign wallet — STATUS is legal in both
+                Session p = open();
+                Response st = cmd(p, 0x20, 0, 0, new byte[0]);
+                p.close();
+                if (st.sw() == 0x9000 && st.data().length == 2 && st.data()[0] == 0x01) {
+                    life = Life.BLANK;
+                } else {
+                    throw new IllegalStateException(
+                            "card holds a wallet we cannot erase — stopping");
+                }
             }
         }
         ensureBlank();

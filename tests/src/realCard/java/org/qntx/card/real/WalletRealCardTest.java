@@ -120,8 +120,9 @@ final class WalletRealCardTest {
     void commandGatesPrecedeEffects() throws Exception {
         Fixture.require();
         loaded();
-        // CREATE's own P1 gate answers before the life gate would matter (§9.2 order)
-        assertEquals(0x6A86, inner(0x21, 2, new byte[0]).sw(), "CREATE P1 out of range");
+        // §14.2 order on a command the life gate refuses: CREATE is BLANK-only, so on a
+        // LOADED card the life gate answers 6985 before the P1 range check is reached
+        assertEquals(0x6985, inner(0x21, 2, new byte[0]).sw(), "CREATE on LOADED: life first");
         assertEquals(0x6700, inner(0x22, 0, new byte[31]).sw(), "VERIFY needs 32 bytes");
         assertEquals(0x6A86, inner(0x30, 2, Vecs.pathSecpEvm()).sw(), "PUBLIC_KEY P1 range");
         assertEquals(0x6700, inner(0x20, 0, new byte[1]).sw(), "STATUS takes no data");
