@@ -12,6 +12,9 @@ final class Apdu {
         0x00, (byte) 0xA4, 0x04, 0x00, 0x07, (byte) 0xF0, 0x71, 0x6E, 0x74, 0x78, 0x01, 0x01, 0x00
     };
 
+    /** GET_IDENTITY of §14.1 — also the command that drives §4.3 initialisation. */
+    static final byte[] GET_IDENTITY = {(byte) 0x80, (byte) 0xE0, 0x00, 0x00, 0x00};
+
     /** SELECT the issuer security domain by its AID. */
     static final byte[] SELECT_ISD = {
         0x00,

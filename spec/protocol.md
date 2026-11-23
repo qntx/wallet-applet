@@ -135,18 +135,21 @@ command is timed by the real-card suite.
    exception for an input point that is not on the curve, has a coordinate `≥ p`, or is compressed.
 4. `signPreComputedHash` and `verifyPreComputedHash` accept a 32-byte hash.
 5. 256-bit EC keys, persistent and `TRANSIENT_DESELECT`, accept the secp256k1 domain parameters and
-   the Wei25519 parameters of §10.4.
+   the Wei25519 parameters of §10.4. The domain parameters of a `TRANSIENT_DESELECT` key need not
+   survive a deselection or a reset (they do not on the baseline chip).
 6. `RandomData.ALG_KEYGENERATION` passes the statistical tests of `docs/architecture.md` §10, and its
    first 32-byte outputs after 100 consecutive power-ups are pairwise distinct.
 7. `setKey`, `setS`, `setW`, `setExponent` and `genKeyPair` on persistent key objects participate in
    an open transaction (JCRE 3.2 §9.3): an abort or power loss restores the previous key value.
 8. Each named transaction of §4.3, executed on the card, consumes at most 50 % of
-   `getMaxCommitCapacity` (measured with `getUnusedCommitCapacity`; consumption is
-   page-granular).
+   `getMaxCommitCapacity`, and `install` of the wallet applet consumes at most 60 % (measured
+   with `getUnusedCommitCapacity`; consumption is page-granular).
 9. One `WAIT` (§9.15) takes at least 900 ms and at most 1100 ms on a contactless reader. The
    lower bound keeps destruction without the code slow (§7.3); the upper bound keeps `W` units and
    a `VERIFY` within one iOS NFC connection (about 20 s by the limit commonly assumed for iOS;
    Apple does not document it, and it is measured on reference phones before freeze).
+10. The production load file installs (`INSTALL [for install and make selectable]` of the wallet
+    and NDEF applets succeeds).
 
 HMAC-SHA512 is computed in software over `ALG_SHA_512`. Ed25519 is computed through the
 short-Weierstrass curve Wei25519 (§10.4); the card outputs Wei25519 points and the host encodes
@@ -179,17 +182,21 @@ read-back gate (§9.5 step 6); both perform T-ERASE and return `6F00`. There is 
 transition. A re-seal (`IMPORT` into `LOADED`, §9.14) replaces only the access
 code of the same wallet.
 
+Between install and the end of initialisation (§4.3) the applet is *uninitialised* — not a
+`life` value: every command except `SELECT` and `GET_IDENTITY` returns `6283` (§4.3).
+
 ### 4.2 Persistent state
 
 Every persistent change happens inside exactly one of the named transactions of §4.3. "Cleared"
 means set to all zero bytes; key objects are never cleared but overwritten with fresh random
 values inside the transaction (§16.1). `fails` is never cleared: `fails ← 0` writes the value
-`0x0000` and its complement `0xFFFF` (§16.2 item 2).
+`0x0000` and its complement `0xFFFF` (§16.2 item 2). `f` is an unsigned 16-bit value: every
+value ≥ `L`, including those ≥ `0x8000`, counts as `f ≥ L`.
 
 | Field | Content | Size | Written by |
 | --- | --- | --- | --- |
-| `life` | `FACTORY`, `BLANK` or `LOADED` | 2 (coded, §16.2) | install, T-PERSO, T-CREATE, T-INSTALL, T-ERASE |
-| `idKey` | Identity key pair, secp256k1 (private 32, public 65) | key pair | install |
+| `life` | `FACTORY`, `BLANK` or `LOADED` | 2 (coded, §16.2) | initialisation, T-PERSO, T-CREATE, T-INSTALL, T-ERASE |
+| `idKey` | Identity key pair, secp256k1 (private 32, public 65) | key pair | initialisation |
 | `cert` | Certificate (§5.2) | 97 | T-PERSO |
 | `caKey` | CA public key, uncompressed | 65 (key object) | T-PERSO |
 | `edCounter` | Ed25519 nonce counter `N` (§12.3), initially 0 | 4 | T-EDCTR |
@@ -199,9 +206,10 @@ values inside the transaction (§16.1). `fails` is never cleared: `fails ← 0` 
 | `fp` | Seed fingerprint `SHA-256("qntx-card/v1/fingerprint" ‖ seed)` (§10.1) | 32 | T-CREATE, T-INSTALL, T-ERASE |
 | `origin` | `0x01` generated on a card, `0x02` imported (§9.4) | 2 (coded) | T-CREATE, T-INSTALL, T-ERASE |
 | `members` | Count `c ∈ [1, 3]` and card IDs `ID₁ … ID_c` | 1 + 48 | T-CREATE, T-INSTALL, T-ERASE |
-| `fails` | Consecutive failed `VERIFY` count `f` and its bitwise complement | 2 + 2 | install, T-FAIL, T-OK, T-CREATE, T-INSTALL, T-ERASE |
-| `linkKey` | Link key pair, secp256k1, public key `LK` (§11) | key pair | install, T-OFFER, T-CREATE, T-INSTALL |
+| `fails` | Consecutive failed `VERIFY` count `f` and its bitwise complement | 2 + 2 | initialisation, T-FAIL, T-OK, T-CREATE, T-INSTALL, T-ERASE |
+| `linkKey` | Link key pair, secp256k1, public key `LK` (§11) | key pair | initialisation, T-OFFER, T-CREATE, T-INSTALL, T-ERASE |
 | `offer` | `NONE` or `VALID` | 2 (coded) | T-OFFER, T-CREATE, T-INSTALL, T-ERASE |
+| `init` | Next initialisation step or `INIT_DONE` (coded, §16.2) | 2 | install (0), initialisation |
 
 In `BLANK`, `ct`, `tag`, `fp`, `origin` and `members` are cleared, `fails` holds 0 and `wrapKey`
 holds a random key unrelated to any ciphertext. After T-CREATE, T-INSTALL and T-ERASE, `offer = NONE` and
@@ -221,14 +229,20 @@ and nothing else (§3 item 8).
 | T-FAIL | `VERIFY` | `fails ← f + 1` |
 | T-OK | `VERIFY` | `fails ← 0` |
 | T-CHANGE | `CHANGE` | `wrapKey` (fresh random), `ct`, `tag` |
-| T-ERASE | `ERASE`, `VERIFY` | `life ← BLANK`; `wrapKey` ← fresh random; clear `ct`, `tag`, `fp`, `origin`, `members`; `fails ← 0`; `offer ← NONE` |
+| T-ERASE | `ERASE`, `VERIFY` | `life ← BLANK`; `wrapKey` ← fresh random; clear `ct`, `tag`, `fp`, `origin`, `members`; `fails ← 0`; link private key ← fresh random scalar; `offer ← NONE` |
 | T-OFFER | `OFFER` with `offer = NONE` | new `linkKey` (`genKeyPair`); `offer ← VALID` |
 | T-EDCTR | `SIGN_ED25519` (`P1 = 0x00`) | `edCounter ← N` |
 
-The applet constructor (install) allocates every object, generates `idKey` and an initial
-`linkKey`, sets `edCounter = 0`, `fails ← 0`, `offer = NONE`, `life = FACTORY`, and loads the constants of §10.4
-and `docs/architecture.md` §5.5. Commit-buffer consumption is page-granular on the baseline chip; §3
-item 8 bounds it.
+`install` allocates every object and writes nothing else (on the baseline chip `install` runs
+inside one platform transaction whose journal holds 5,120 B; install MUST consume at most 60 % of
+`getMaxCommitCapacity`). Initialisation then loads the domain parameters and RSA moduli of §10
+and `docs/architecture.md` §5.5 into the persistent key objects, generates `idKey` and an initial
+`linkKey`, installs a random `wrapKey`, sets `fails ← 0`, `offer = NONE`, `life = FACTORY`
+(`edCounter` is 0 from allocation) and finally writes `init ← INIT_DONE`. It runs outside any
+transaction in steps, each driven by one `GET_IDENTITY` (§14.1) and each MUST complete within
+500 ms on the baseline chip; every step is idempotent, `init` advances only after a step
+completed, so a torn step is repeated whole. `init` is a coded value read twice like `life`
+(§16.2 item 1). The number of steps is an implementation property, at most 16.
 
 ## 5. Identity and certificates
 
@@ -305,7 +319,8 @@ On a match the seed is `CBC⁻¹(K_enc, 0¹⁶, ct)`. On a mismatch nothing is d
 represent has been committed and read back (T-FAIL). A match resets the count (T-OK). When `f`
 reaches `L` the wallet is erased (T-ERASE). The first `F` attempts after a success are immediate;
 while `f ≥ F`, each attempt requires that `W` `WAIT` units (§9.15) have been completed in the same
-session since the previous attempt. Waiting is session state only: a power loss discards it and
+session since the previous attempt; otherwise `VERIFY` returns `6986` without comparing. Waiting
+is session state only: a power loss discards it and
 never changes `f`. The exact order is in §9.5.
 
 ## 8. Secure session
@@ -402,8 +417,13 @@ A session is torn down by: `SELECT` of the wallet applet; `OPEN`; a failure in �
 counter exhaustion; any inner `6F00` (after its response record is sent); card reset or loss of
 the field. Teardown wipes, in this order: the `verified` flag, the decrypted seed, the
 derivation caches, the Ed25519 stream, the pending export and import states, the `waited` count,
-the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory, and the applet wipes them explicitly
-in `select()` and in `OPEN` without relying on deselection.
+the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory. The applet wipes them explicitly in `select()`
+and in `OPEN`, and again in `deselect()` as defence in depth; no property depends on `deselect()`
+being called (a loss of the field calls nothing, and the NDEF applet shares the wallet's context,
+so selecting it does not clear `CLEAR_ON_DESELECT` memory). The domain parameters of a transient
+EC key object are cleared together with its value (on the development card on every deselection,
+including a re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`,
+before any use.
 
 ## 9. Command reference
 
@@ -418,10 +438,11 @@ in `select()` and in `OPEN` without relying on deselection.
 | `SESSION` | `80 12 00 00 Lc record 00` | open session | 8.3 |
 
 Outer dispatch order: the `SELECT` that selected the applet returns `9000`; otherwise
-`CLA ≠ 0x80` returns `6E00`; an `INS` not in this table returns `6D00`; then the command's own
-checks apply. (Non-normative: a command whose CLA names a logical channel other than 0 is answered
-by the platform, `6881` on the baseline chip, and never reaches the applet, which is not
-multiselectable.)
+`CLA ≠ 0x80` returns `6E00`; while uninitialised (§4.3), `GET_IDENTITY` performs one
+initialisation step and every other `INS` — known or not — returns `6283`; an `INS` not in this
+table returns `6D00`; then the command's own checks apply. (Non-normative: a command whose CLA
+names a logical channel other than 0 is answered by the platform, `6881` on the baseline chip,
+and never reaches the applet, which is not multiselectable.)
 
 ### 9.2 Inner commands
 
@@ -443,8 +464,9 @@ multiselectable.)
 
 **Checking order.** Every inner command checks, in this order, returning the first failure:
 `INS` known (else `6D00`); `life` allows the command (else `6985`); `P1`/`P2` (else `6A86`);
-length (else `6700`); verified if required (else `6982`); other preconditions (`6985`); data
-validity (`6A80`); then the effect. Unless stated otherwise `P1 = P2 = 0x00` is required.
+length (else `6700`); verified if required (else `6982`); other preconditions (`6985`; the wait
+of `VERIFY`, §9.5 step 3: `6986`); data validity (`6A80`); then the effect. Unless stated
+otherwise `P1 = P2 = 0x00` is required.
 
 **Pending states.** Three multi-command operations keep state between commands: the Ed25519
 stream (§9.11), the pending export (§9.13) and the pending import (§9.14). Before dispatching an
@@ -478,7 +500,7 @@ check at that position). The command sections give the effects.
 | --- | --- | --- | --- | --- | --- | --- |
 | `STATUS` | `BLANK`, `LOADED` | `00 00` | 0 | — | — | — |
 | `CREATE` | `BLANK` | `P1 ∈ {00, 01}`, `P2 = 00` | `P1 = 00`: 64, 80, 96; `P1 = 01`: 96, 112, 128 | — | — | `others` pairwise distinct; none equals `ID(A)`; (`P1 = 01`) BIP-32 master valid |
-| `VERIFY` | `LOADED` | `00 00` | 32 | — | wait complete if `F ≤ f < L` (§9.5 steps 2–3: `f ≥ L` erases first) | — (outcome `9000`, `63Cx`, `6983` or `6F00` per §9.5) |
+| `VERIFY` | `LOADED` | `00 00` | 32 | — | wait complete if `F ≤ f < L`, else `6986` (§9.5 steps 2–3: `f ≥ L` erases first) | — (outcome `9000`, `63Cx`, `6983` or `6F00` per §9.5) |
 | `CHANGE` | `LOADED` | `00 00` | 32 | required | — | — |
 | `ERASE` | `LOADED` | `00 00` | 0 | required | — | — |
 | `WAIT` | `LOADED` | `00 00` | 0 | — | — | — |
@@ -487,7 +509,7 @@ check at that position). The command sections give the effects.
 | `SIGN_BIP340` | `LOADED` | `00 00` | `65 + 4d` | required | — | `d ∈ [1, 10]`; every child valid; `int(tweak) < n`; tweaked key ≠ 0 |
 | `SIGN_ED25519` begin | `LOADED` | `P1 ∈ {00, 01, 02}`, `P2 = 00` | `1 + 4d` | required | `edCounter ≠ 0xFFFFFFFF` | `d ∈ [1, 10]`; all indices hardened |
 | `SIGN_ED25519` update | `LOADED` | as above | 1–236 | required | active stream | — |
-| `SIGN_ED25519` finish | `LOADED` | as above | 0–236 | required | active stream | — |
+| `SIGN_ED25519` finish | `LOADED` | as above | 1–236 | required | active stream | — |
 | `OFFER` | `BLANK`, `LOADED` | `00 00` | 0 | — | — | — |
 | `EXPORT` `P1 = 00` | `LOADED` | `P1 ∈ {00, 01}`, `P2 = 00` | 226 | required | — | `cert_T` under `caKey`; `A_T ≠ A`; `ID(A_T)` in `members`; `A_T` decompresses; `LK_T[0] = 04` and `sig_T`; `LK_T` a valid point |
 | `EXPORT` `P1 = 01` | `LOADED` | as above | 32 | required | pending export | — |
@@ -541,7 +563,7 @@ Data: `accessHash(32)` (`Lc = 32`, else `6700`).
 2. Read `fails` from persistent memory twice, independently, into `f_a` and `f_b`. If the
    complement of either read disagrees: T-ERASE, return `6F00`. If `f_a ≥ L` or `f_b ≥ L`:
    T-ERASE, return `6983`. Each test is thus evaluated twice, once per read (§16.2).
-3. If `f_a ≥ F` and `waited < W`: return `6985`. Nothing is written and the candidate is not used.
+3. If `f_a ≥ F` and `waited < W`: return `6986`. Nothing is written and the candidate is not used.
 4. `waited ← 0`.
 5. T-FAIL: `fails ← f_a + 1` with its complement; commit.
 6. Read-back gate, evaluated twice independently (§16.2), each on a fresh read `f₁` of `fails`:
@@ -604,16 +626,19 @@ tweaked key returns `6A80`. Response: `R_x(32) ‖ s(32)` (§12.2).
 | --- | --- | --- | --- |
 | `0x00` | begin | `path` (ed25519) | `W(R)(64)` |
 | `0x01` | update | `chunk`, 1–236 bytes | empty |
-| `0x02` | finish | `chunk`, 0–236 bytes | `le32(S)(32)` |
+| `0x02` | finish | `chunk`, 1–236 bytes | `le32(S)(32)` |
 
 Requires verified. `P1 ∉ {0x00, 0x01, 0x02}` returns `6A86`. `update` and `finish` without an
-active stream return `6985`. `begin` with `edCounter = 0xFFFFFFFF` returns `6985`. `begin` with
+active stream return `6985`. An empty `update` or `finish` returns `6700`; the stream is at
+least 64 bytes long, so its last chunk is always sent with `finish`. `begin` with
+`edCounter = 0xFFFFFFFF` returns `6985`. `begin` with
 an active stream ends it and starts a new one. The chunks form the *stream*, the input of the
 RFC 8032 challenge hash; hosts MUST send `encode(R) ‖ encode(A) ‖ M`, where `encode(R)` is the host's
 encoding of the returned `W(R)` and `encode(A)` that of `PUBLIC_KEY` for `path` (§10.4). The card
 does not parse the stream; any other stream yields a signature that is invalid under the card's
 key (§12.3). The host forms the signature `encode(R) ‖ le32(S)`. The message has no length limit.
-Algorithm: §12.3.
+Note: chunks above 236 bytes cannot be carried by a command record (§8.3); the card checks the
+bound anyway. Algorithm: §12.3.
 
 ### 9.12 OFFER (`0x40`)
 
@@ -771,7 +796,9 @@ G_W = (0x2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad245a,
 ```
 
 `G_W` corresponds to `B`; scalar multiples are taken with the scalar reduced mod `ℓ`
-(`A = (a mod ℓ)·G_W`). On the wire a point is `W(P) = X(32) ‖ Y(32)`, its affine coordinates
+(`A = (a mod ℓ)·G_W`). The card's Wei25519 key objects are loaded with cofactor `K = 1`
+(`setK(1)`); scalars are reduced mod `ℓ` before use, so the engine never applies a cofactor. On
+the wire a point is `W(P) = X(32) ‖ Y(32)`, its affine coordinates
 big-endian. The host maps it to edwards25519 and encodes it:
 
 ```text
@@ -867,6 +894,10 @@ aux = 32 random bytes
 sig = BIP-340 Sign(d, message, aux)                (BIP-340 "Default Signing")
 ```
 
+`Q = P_even + t·G` is computed independently of `d` (`PACE_GM`, or `Q = P_even` when `t = 0`, so
+the engine is never given a zero scalar); its parity decides BIP-340's negation of `d`. A zero
+nonce `k'` (probability about 2⁻²⁵⁶) returns `6F00`.
+
 For a BIP-86 key-path spend the host sends `tweak = TaggedHash("TapTweak", x(P))`; for a script
 tree `TaggedHash("TapTweak", x(P) ‖ merkleRoot)`; `tweak = 0³²` signs with the even-y internal key.
 Output `R_x(32) ‖ s(32)`.
@@ -909,6 +940,7 @@ This section and §13.2 cover the wallet applet; the NDEF applet's status words 
 | SW | Meaning |
 | --- | --- |
 | `9000` | Success; for `SESSION` the result is the inner status in the response record |
+| `6283` | Uninitialised (§4.3): repeat `GET_IDENTITY` until it returns another status word |
 | `6700` | Wrong `Lc` |
 | `6982` | Record failure (§8.3 steps 2–5); the session is torn down |
 | `6985` | Wrong `life`, or `SESSION` with no open session |
@@ -927,7 +959,8 @@ This section and §13.2 cover the wallet applet; the NDEF applet's status words 
 | `6700` | — | Wrong data length, or record plaintext shorter than 3 bytes |
 | `6982` | — | Access code not verified in this session |
 | `6983` | — | The failure limit was reached; the wallet on this card has been erased |
-| `6985` | — | Wrong `life`; no offer; no pending stream, export or import; Ed25519 counter exhausted; `VERIFY` while `f ≥ F` without `W` completed `WAIT` units |
+| `6985` | — | Wrong `life`; no offer; no pending stream, export or import; Ed25519 counter exhausted |
+| `6986` | — | `VERIFY` while `F ≤ f < L` without `W` `WAIT` units completed in this session since the previous attempt (§7.3, §9.5 step 3); nothing was written |
 | `6A80` | — | Invalid data: member IDs, seed, path, tweak, derived key, certificate, signature, point, MAC, padding, payload, re-seal of a different wallet |
 | `6A86` | — | Wrong `P1`/`P2` |
 | `6D00` | — | Unknown inner `INS` |
@@ -936,6 +969,10 @@ This section and §13.2 cover the wallet applet; the NDEF applet's status words 
 ## 14. Personalisation
 
 ### 14.1 GET_IDENTITY (`80 E0 00 00 00`)
+
+While uninitialised (§4.3) GET_IDENTITY performs the next initialisation step and returns `6283`
+while steps remain; the call that completes the last step continues with the checks below and
+returns `A`.
 
 Checks: `life = FACTORY` (else `6985`); `P1 = P2 = 0x00` (else `6A86`); no data (else `6700`).
 Response: `A(33)`.
@@ -958,17 +995,19 @@ Every production card MUST be prepared as follows:
    file hash against the reproducible release build.
 3. Install the wallet applet (`F0716E74780101`, no install parameters) and the NDEF applet
    (`D2760000850101`, applet-specific install data = the NDEF message, §15).
-4. `SELECT`, `GET_IDENTITY`; the batch CA signs `"qntx-card/v1/cert" ‖ A` in its HSM.
-5. `PERSONALIZE`; `SELECT`, `OPEN` with a fresh host key; verify the certificate and the session
+4. Repeat `SELECT`, `GET_IDENTITY` until it returns `9000` (initialisation, §4.3); the tool
+   bounds the repetitions at 16 and fails the card otherwise. The last response carries `A`.
+5. The batch CA signs `"qntx-card/v1/cert" ‖ A` in its HSM.
+6. `PERSONALIZE`; `SELECT`, `OPEN` with a fresh host key; verify the certificate and the session
    signature against the batch anchor.
-6. GlobalPlatform `GET STATUS`: the registry MUST equal the batch's factory registry recorded at
+7. GlobalPlatform `GET STATUS`: the registry MUST equal the batch's factory registry recorded at
    admission plus exactly the load file and the two instances above.
-7. Print `short(A)` (§1) on the card face and read it back by the tool's camera or operator check
+8. Print `short(A)` (§1) on the card face and read it back by the tool's camera or operator check
    against `short(A)` computed from the `A` returned by `GET_IDENTITY` in step 4, which MUST equal
-   `cert[0..33)` from the `OPEN` of step 5 (`GET_IDENTITY` is not available after `PERSONALIZE`).
-8. Replace the ISD keys with random keys generated inside the personalisation tool and never
+   `cert[0..33)` from the `OPEN` of step 6 (`GET_IDENTITY` is not available after `PERSONALIZE`).
+9. Replace the ISD keys with random keys generated inside the personalisation tool and never
    stored or output.
-9. Record card ID, short ID, CPLC, certificate and load file hash in the batch record.
+10. Record card ID, short ID, CPLC, certificate and load file hash in the batch record.
 
 The CA private keys live only in an offline HSM under two-person control. Test and production
 CAs are distinct.
@@ -991,7 +1030,7 @@ Commands (`CLA = 0x00`, else `6E00`); the selected file is transient and reset b
 | Command | APDU | Result |
 | --- | --- | --- |
 | SELECT by AID | `00 A4 04 00 07 D2760000850101 00` | `9000` |
-| SELECT file | `00 A4 00 0C 02 fid` | `9000` for `E103`, `E104`; else `6A82`; `P1`/`P2` other than `00 0C` → `6A86` |
+| SELECT file | `00 A4 00 0C 02 fid` | `9000` for `E103`, `E104`; any other data (other `fid`, `Lc ≠ 2`) → `6A82` and the selection is unchanged; `P1`/`P2` other than `00 0C` → `6A86` |
 | READ BINARY | `00 B0 off(2) Le` | No file selected → `6985`; `off > size` → `6B00`; else `min(Ne, size − off)` bytes from `off`, `9000` |
 | UPDATE BINARY | `00 D6 …` | `6985` |
 | other `INS` | — | `6D00` |
@@ -1031,10 +1070,13 @@ belongs to a past transfer or ciphertext (§3 item 7).
 
 ### 16.2 Fault resistance
 
-1. `life`, `origin`, `offer`, the session flags `verified` and session-open, the pending-state
+1. `life`, `origin`, `offer`, `init`, the session flags `verified` and session-open, the
+   pending-state
    flags, and the result of every signature, MAC, certificate and fingerprint verification are
    16-bit values from a code set whose members have pairwise Hamming distance ≥ 8 and differ from
-   `0x0000` and `0xFFFF` (`docs/architecture.md` §6). A transient flag that reads `0x0000` is the state
+   `0x0000` and `0xFFFF` (`docs/architecture.md` §6). `init` holds the step indices `0 … N−1`
+   (including `0x0000`) until initialisation completes; only `INIT_DONE` is a code-set member
+   (§4.3). A transient flag that reads `0x0000` is the state
    the platform leaves after clearing transient memory and means no session, not verified, no
    pending state. Any other value returns `6F00` and tears the session down.
 2. `fails` is stored with its bitwise complement in every state, from the constructor on
@@ -1088,7 +1130,7 @@ index depends on secret data.
 ### 16.5 Points
 
 A private key used in more than one scalar multiplication with external input MUST only be
-multiplied by points that were checked to be on the curve (`IMPORT` `P1 = 0x00` step 5).
+multiplied by points that were checked to be on the curve (`IMPORT` `P1 = 0x00` step 6).
 Single-use private keys (`x` in `OPEN`, `e` in `EXPORT`) rely on `PLAIN_XY` rejecting invalid
 points (§3 item 3). Public keys loaded with `setW` from external input are checked explicitly
 first (`caKey` in `PERSONALIZE`, decompressed `A_T` and `A_S`, §10.5), because `setW` does not
@@ -1097,15 +1139,49 @@ check points. The identity key is never multiplied by any point. Wallet keys are
 
 ### 16.6 Memory and time
 
-All session state is `CLEAR_ON_DESELECT`. On the baseline chip every command MUST complete within
-1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Card times computed
-from unit costs measured on the development card: `OPEN` 160 ms; `VERIFY` 124 ms; `WAIT` 965 ms;
-`CREATE` 106 ms; `SIGN_ECDSA` 411 ms (cold, depth 5); `SIGN_BIP340` 724 ms (cold); `SIGN_ED25519`
-begin 430 ms, update 21 ms, finish 486 ms; `PUBLIC_KEY` ed25519 217 ms; `OFFER` 137 ms (78 ms with
-a valid offer); `EXPORT` `P1 = 0x00` 424 ms; `IMPORT` `P1 = 0x00` 471 ms. The longest command
-(`WAIT`) has a margin of 1.55× to the limit (1.36× at the 1100 ms bound of §3 item 9), every
-other command at least 2×. Full commands are timed by the real-card suite before
-freeze.
+All session state is `CLEAR_ON_DESELECT`. The domain parameters of a transient EC key object are
+cleared together with its value (on the development card on every deselection, including a
+re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`, before any
+use (§8.5). Each initialisation step of §4.3 MUST complete within
+500 ms; on the baseline chip every command MUST complete within
+1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Measured on the
+development card (JCOP 4 P71, J3R351, contactless, host-side round trip including transport;
+median / p95 ms, n):
+
+| Command | median | p95 | n |
+| --- | --- | --- | --- |
+| `SELECT` | 28 | 28 | 20 |
+| `GET_IDENTITY` | 29 | 29 | 1 |
+| initialisation step (max) | 148 | 148 | 7 |
+| `PERSONALIZE` | 609 | 609 | 1 |
+| `OPEN` | 315 | 315 | 20 |
+| `STATUS` | 33 | 33 | 20 |
+| `VERIFY` right | 214 | 215 | 20 |
+| `VERIFY` wrong | 79 | 80 | 20 |
+| `WAIT` | 970 | 970 | 20 |
+| `CREATE` `P1 = 0` | 207 | 207 | 20 |
+| `CREATE` `P1 = 1` | 202 | 202 | 20 |
+| `ERASE` | 54 | 54 | 40 |
+| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 413 | 20 |
+| `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 151 | 20 |
+| `SIGN_ECDSA`, depth 5, cold | 604 | 606 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 315 | 318 | 20 |
+| `SIGN_BIP340` (tweak), cold | 1060 | 1060 | 20 |
+| `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
+| `SIGN_ED25519` begin, cold | 498 | 498 | 60 |
+| `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
+| `SIGN_ED25519` finish, cold | 668 | 672 | 60 |
+| `OFFER` first | 216 | 216 | 1 |
+| `OFFER` valid | 163 | 163 | 20 |
+
+The slowest command (`SIGN_BIP340` with a tweak, cold) has a margin of 1.4× to the limit;
+`WAIT` 1.5× (1.1× at the 1100 ms upper bound of §3 item 9). A command record costs about
+33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,395 ms cold
+(498 + 5 × 46 + 668). `docs/architecture.md` §10 lists the real-card
+timing suite.
 
 ### 16.7 Randomness
 
@@ -1151,6 +1227,6 @@ files give exact bytes.
 | `ecdsa.json` | 12.1 | Keys, digests, signatures for verification; recovery-id and low-`s` cases | noble `secp256k1`; BouncyCastle |
 | `bip340.json` | 12.2 | BIP-340 official vectors; BIP-341/BIP-86 tweak cases; fixed-`aux` exact signatures | BIP-340 reference CSV; BIP-86 vectors; noble `schnorr` |
 | `ed25519.json` | 10.4, 12.3 | RFC 8032 §7.1 vectors (verification); fixed `N`, `Zr`, card ID → exact `r`, `W(R)`, `S`; two card IDs with equal `N` and `Zr` give different `r`; a wrong stream gives an invalid signature | RFC 8032; noble `ed25519`; libsodium |
-| `apdu.json` | 9, 13, 14 | Every command's encoding; for each command every precondition in checking order with its status word | Generated from this document's tables by `spec/vectors/gen/apdu.py` |
-| `verify-sequence.json` | 7.3, 9.3, 9.5, 9.12, 9.14, 9.15 | Command sequences with the expected inner status word and `STATUS` after each step: wrong codes from `f = 0` to `L` (`63C9` … `63C7`, then `6985` until `W` `WAIT`s, `63C6` … `63C1`, `6983`); `waited` lost on a new `OPEN`; `WAIT` beyond `W`; a right code at every `f < L` resets; the `tries = 0` state (power loss after the `L`-th T-FAIL) where the next `VERIFY` returns `6983` without comparing; a re-seal of a `LOADED` card resets `fails`; `OFFER` repeated with a valid offer returns the same `LK`; `IMPORT` `P1 = 0x00` after a committed install returns `6985` | Generated from §9 by `spec/vectors/gen/sequence.py`; replayed by the card suite and by the qntx/wallet protocol client against the simulator |
+| `apdu.json` | 9, 13, 14 | Every command's encoding; for each command every precondition in checking order with its status word; the `UNINIT` setup and the `INIT` cases of §4.3 | Generated from this document's tables by `spec/vectors/gen/apdu.py` |
+| `verify-sequence.json` | 7.3, 9.3, 9.5, 9.12, 9.14, 9.15 | Command sequences with the expected inner status word and `STATUS` after each step: wrong codes from `f = 0` to `L` (`63C9` … `63C7`, then `6986` until `W` `WAIT`s, `63C6` … `63C1`, `6983`); `waited` lost on a new `OPEN`; `WAIT` beyond `W`; a right code at every `f < L` resets; the `tries = 0` state (power loss after the `L`-th T-FAIL) where the next `VERIFY` returns `6983` without comparing; a re-seal of a `LOADED` card resets `fails`; `OFFER` repeated with a valid offer returns the same `LK`; `IMPORT` `P1 = 0x00` after a committed install returns `6985` | Generated from §9 by `spec/vectors/gen/sequence.py`; replayed by the card suite and by the qntx/wallet protocol client against the simulator |
 | `ndef.json` | 15 | Capability container and NDEF file for sample messages; READ BINARY offsets | NFC Forum T4T 2.0 §5 by hand |

@@ -93,11 +93,37 @@ public final class Vecs {
         throw new IllegalStateException("cert.json lacks card2-under-ca1");
     }
 
-    /** A freshly installed, selected card in FACTORY. */
-    public static Card factory() {
+    /** A freshly installed, selected card — still uninitialised (§4.3). */
+    public static Card installed() {
         Card card = new Card();
         card.install(Spec.WALLET_AID, WalletApplet.class);
         card.transmit(Spec.SELECT);
+        return card;
+    }
+
+    /**
+     * Repeat GET_IDENTITY until it answers other than {@code 6283} — the §14.3 initialisation
+     * drive, bounded at 16 repetitions.
+     */
+    public static void driveInit(Card card) {
+        for (int i = 0; i < 16; i++) {
+            card.transmit(Spec.SELECT);
+            byte[] rapdu = card.transmit(unhex("80E0000000"));
+            if (sw(rapdu) != 0x6283) {
+                if (sw(rapdu) != 0x9000) {
+                    throw new IllegalStateException(
+                            "GET_IDENTITY failed: " + Integer.toHexString(sw(rapdu)));
+                }
+                return;
+            }
+        }
+        throw new IllegalStateException("initialisation did not finish within 16 steps");
+    }
+
+    /** A freshly installed, selected card in FACTORY. */
+    public static Card factory() {
+        Card card = installed();
+        driveInit(card);
         return card;
     }
 

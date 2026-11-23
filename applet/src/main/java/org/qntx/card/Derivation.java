@@ -68,10 +68,12 @@ final class Derivation {
     }
 
     /**
-     * RFC 2104 HMAC-SHA512 with the shared engine and {@link Mem#H}: {@code H[0..128)} holds the
-     * zero-padded key, xored first with {@code 0x36} (ipad, inner digest at {@code H[128..192)}),
-     * then with {@code 0x6A} (0x36→0x5C, opad). Keys are at most 128 bytes; {@code msg} is one
-     * contiguous segment.
+     * RFC 2104 HMAC-SHA512 with the shared engine and {@link Mem#H}: {@code H[0..128)} is filled
+     * with the pad byte and the key xored into its first {@code kLen} bytes (inner digest at {@code
+     * H[128..192)}); the opad block is rebuilt the same way, so {@code key} must still be intact
+     * after the inner {@code doFinal} — every call site passes a {@link Const} key or {@code
+     * N[32..64)}, neither touched by that digest nor by the output write. Keys are at most 128
+     * bytes; {@code msg} is one contiguous segment.
      */
     private void hmac(
             byte[] key,
@@ -84,17 +86,17 @@ final class Derivation {
             short oOff) {
         byte[] h = mem.H;
         MessageDigest sha = mem.sha512;
-        Util.arrayFillNonAtomic(h, (short) 0, (short) 128, (byte) 0);
-        Util.arrayCopy(key, kOff, h, (short) 0, kLen);
-        for (short i = 127; i >= 0; i--) {
-            h[i] ^= 0x36;
-        }
         // a command that died between update and doFinal leaves pending bytes
         sha.reset();
+        Util.arrayFillNonAtomic(h, (short) 0, (short) 128, (byte) 0x36);
+        for (short i = 0; i < kLen; i++) {
+            h[i] ^= key[(short) (kOff + i)];
+        }
         sha.update(h, (short) 0, (short) 128);
         sha.doFinal(msg, mOff, mLen, h, (short) 128);
-        for (short i = 127; i >= 0; i--) {
-            h[i] ^= 0x6A;
+        Util.arrayFillNonAtomic(h, (short) 0, (short) 128, (byte) 0x5C);
+        for (short i = 0; i < kLen; i++) {
+            h[i] ^= key[(short) (kOff + i)];
         }
         sha.update(h, (short) 0, (short) 128);
         sha.doFinal(h, (short) 128, (short) 64, out, oOff);

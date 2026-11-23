@@ -209,16 +209,25 @@ final class ModArith {
                     (RSAPrivateKey)
                             KeyBuilder.buildKey(
                                     KeyBuilder.TYPE_RSA_PRIVATE, KeyBuilder.LENGTH_RSA_512, false);
-            rsa[m].setModulus(MOD, (short) (m * 64), (short) 64);
-            rsa[m].setExponent(EXP2, (short) 0, (short) EXP2.length);
         }
         rsaSqrt =
                 (RSAPrivateKey)
                         KeyBuilder.buildKey(
                                 KeyBuilder.TYPE_RSA_PRIVATE, KeyBuilder.LENGTH_RSA_512, false);
+        rsaCipher = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
+    }
+
+    /**
+     * Initialisation step 3 (§4.3): the RSA moduli and exponents into the four keys. Idempotent — a
+     * torn step reloads the same constants.
+     */
+    void initKeys() {
+        for (short m = 0; m < 3; m++) {
+            rsa[m].setModulus(MOD, (short) (m * 64), (short) 64);
+            rsa[m].setExponent(EXP2, (short) 0, (short) EXP2.length);
+        }
         rsaSqrt.setModulus(MOD, (short) 0, (short) 64);
         rsaSqrt.setExponent(EXP_SQRT, (short) 0, (short) EXP_SQRT.length);
-        rsaCipher = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
     }
 
     /** {@code out = x² mod m} for a 32-byte big-endian {@code x < m}. */

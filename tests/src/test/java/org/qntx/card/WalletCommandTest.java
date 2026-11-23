@@ -134,7 +134,8 @@ final class WalletCommandTest {
                     Vecs.roundtrip(card, session, 0x22, 0, 0, Vecs.accessHashWrong()).sw());
         }
         Response r = Vecs.roundtrip(card, session, 0x22, 0, 0, Vecs.accessHashWrong());
-        assertEquals(0x6985, r.sw(), "4th attempt waits: 15 WAITs outstanding");
+        assertEquals(0x6986, r.sw(), "4th attempt waits: 15 WAITs outstanding");
+        assertEquals(0, card.writes(), "a wait-refused VERIFY writes nothing (§9.5 step 3)");
         for (int i = 0; i < 15; i++) {
             assertEquals(0x9000, Vecs.roundtrip(card, session, 0x25, 0, 0, new byte[0]).sw());
         }

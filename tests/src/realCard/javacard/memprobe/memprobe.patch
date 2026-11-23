@@ -1,0 +1,143 @@
+# SPDX-FileCopyrightText: 2026 QuantX
+# SPDX-License-Identifier: AGPL-3.0-or-later
+diff --git a/org/qntx/card/Ed25519.java b/org/qntx/card/Ed25519.java
+index c3c0576..408da69 100644
+--- a/org/qntx/card/Ed25519.java
++++ b/org/qntx/card/Ed25519.java
+@@ -205,6 +205,6 @@ final class Ed25519 {
+     private void tEdctr(byte[] n32, short off) {
+         JCSystem.beginTransaction();
+         state.write(State.OFF_EDCOUNTER, n32, off, (short) 4);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+     }
+ }
+diff --git a/org/qntx/card/Identity.java b/org/qntx/card/Identity.java
+index bbbfbe2..ac48eae 100644
+--- a/org/qntx/card/Identity.java
++++ b/org/qntx/card/Identity.java
+@@ -200,7 +200,7 @@ final class Identity {
+             ISOException.throwIt(Const.SW_FAULT);
+         }
+         state.setLife(Const.LIFE_BLANK);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+         return 0;
+     }
+ 
+diff --git a/org/qntx/card/Transfer.java b/org/qntx/card/Transfer.java
+index 66fe760..8aace32 100644
+--- a/org/qntx/card/Transfer.java
++++ b/org/qntx/card/Transfer.java
+@@ -403,7 +403,7 @@ final class Transfer {
+         JCSystem.beginTransaction();
+         linkKey.genKeyPair();
+         state.setCoded(State.OFF_OFFER, Const.OFFER_VALID);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+     }
+ 
+     /**
+diff --git a/org/qntx/card/Wallet.java b/org/qntx/card/Wallet.java
+index 2c7ad1c..35d54d7 100644
+--- a/org/qntx/card/Wallet.java
++++ b/org/qntx/card/Wallet.java
+@@ -358,21 +358,21 @@ final class Wallet {
+         linkPrivate.setS(w, W_T, Const.HASH_LEN);
+         state.setCoded(State.OFF_OFFER, Const.OFFER_NONE);
+         state.setLife(Const.LIFE_LOADED);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+     }
+ 
+     /** T-FAIL (§4.3): {@code fails ← f} with its complement. */
+     private void tFail(short f) {
+         JCSystem.beginTransaction();
+         state.writeFails(f);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+     }
+ 
+     /** T-OK (§4.3): {@code fails ← 0}. */
+     private void tOk() {
+         JCSystem.beginTransaction();
+         state.writeFails((short) 0);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+     }
+ 
+     /** T-CHANGE (§4.3): fresh {@code wrapKey}, {@code ct} and {@code tag}. */
+@@ -382,7 +382,7 @@ final class Wallet {
+         wrapKey.setKey(w, W_NEWKEY);
+         state.write(State.OFF_CT, w, W_CT, (short) 64);
+         state.write(State.OFF_TAG, w, W_TAG, (short) 16);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+     }
+ 
+     /**
+@@ -403,7 +403,7 @@ final class Wallet {
+         state.writeFails((short) 0);
+         linkPrivate.setS(w, W_T, Const.HASH_LEN);
+         state.setCoded(State.OFF_OFFER, Const.OFFER_NONE);
+-        JCSystem.commitTransaction();
++        MemProbe.commit();
+     }
+ 
+     /**
+diff --git a/org/qntx/card/WalletApplet.java b/org/qntx/card/WalletApplet.java
+index cb675aa..7d8364b 100644
+--- a/org/qntx/card/WalletApplet.java
++++ b/org/qntx/card/WalletApplet.java
+@@ -57,10 +57,12 @@ public final class WalletApplet extends Applet {
+                         (ECPrivateKey) link.getPrivate());
+         transfer = new Transfer(mem, state, session, identity, secp, derivation, wallet, link);
+         register(bArray, (short) (bOffset + 1), bArray[bOffset]);
++        MemProbe.installEnd();
+     }
+ 
+     /** GlobalPlatform install entry; the instance AID is taken from the install data. */
+     public static void install(byte[] bArray, short bOffset, byte bLength) {
++        MemProbe.installStart();
+         new WalletApplet(bArray, bOffset);
+     }
+ 
+@@ -105,6 +107,7 @@ public final class WalletApplet extends Applet {
+             }
+             throw e;
+         } catch (Exception e) {
++            MemProbe.fault(e);
+             // §16.3 item 4: unexpected exceptions map to 6F00, reason codes never escape
+             mem.wipeScratch();
+             session.teardown();
+@@ -121,6 +124,12 @@ public final class WalletApplet extends Applet {
+         if (buf[ISO7816.OFFSET_CLA] != Const.CLA) {
+             ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
+         }
++        // memprobe build only: the report answers even mid-initialisation (before the §4.3
++        // gate) and never resets the per-command commit log it is about to return
++        if (buf[ISO7816.OFFSET_INS] == MemProbe.INS_REPORT) {
++            return MemProbe.report(apdu);
++        }
++        MemProbe.begin(buf);
+         // the initialisation gate of §4.3/§9.1, before reception and the INS switch: a card
+         // whose bounded install steps have not all run answers only GET_IDENTITY, which
+         // performs exactly one step. init is a coded value read twice like life (§16.2
+@@ -174,6 +183,7 @@ public final class WalletApplet extends Applet {
+      * repeated whole (every step is idempotent). Outside any transaction.
+      */
+     private void runInitStep(short i) {
++        MemProbe.initStep(i);
+         switch (i) {
+             case 0:
+                 identity.initDomains();
+@@ -198,6 +208,9 @@ public final class WalletApplet extends Applet {
+                 break;
+         }
+         state.setInit(i == (short) (Const.INIT_STEPS - 1) ? Const.INIT_DONE : (short) (i + 1));
++        if (i == (short) (Const.INIT_STEPS - 1)) {
++            MemProbe.initEnd();
++        }
+     }
+ 
+     /**

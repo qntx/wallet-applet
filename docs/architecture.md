@@ -27,12 +27,13 @@ wallet-applet/
 │   └── src/main/java/org/qntx/card/host/
 ├── tests/                     JUnit 6: unit, simulator command tests, tearing, vectors, fuzz; real-card suite
 │   ├── src/test/java/
-│   └── src/realCard/java/
-├── tools/                     qntx-card CLI: install, personalise, debug shell (picocli, GlobalPlatformPro, apdu4j)
+│   └── src/realCard/            §10 suite: java/ JUnit tests; javacard/ test-only probe and memprobe CAPs
+├── tools/                     qntx-card CLI: install, personalise, registry, debug shell (picocli, GlobalPlatformPro, apdu4j)
 ├── spec/
 │   ├── protocol.md            normative specification (MIT OR Apache-2.0)
 │   └── vectors/               *.json + gen/java (BouncyCastle) + gen/ts (noble) + gen/apdu.py
 ├── AGENTS.md README.md SECURITY.md CONTRIBUTING.md LICENSE LICENSES/ REUSE.toml
+├── buildSrc/                  the CAP conversion shared by applet/ and the test CAPs
 ├── build.gradle.kts settings.gradle.kts gradle/libs.versions.toml gradle.properties
 └── .github/workflows/{ci.yml,release.yml}
 ```
@@ -49,7 +50,7 @@ tests (§14); later stages may extend a class only as their acceptance tables st
 
 | Class | Responsibility | Spec | Stage |
 | --- | --- | --- | --- |
-| `WalletApplet` | `install`, `select`, `process`; outer dispatch; inner dispatch with the checking order, pending-state ending and `6F00` mapping of `protocol.md` §9.2 | §6, §9.1, §9.2 | scaffold |
+| `WalletApplet` | `install` (allocation only), `select`, `process`; outer dispatch incl. the bounded initialisation gate of §4.3; inner dispatch with the checking order, pending-state ending and `6F00` mapping of `protocol.md` §9.2 | §4.3, §6, §9.1, §9.2 | scaffold |
 | `Const` | Status words, INS codes, labels, coded constants (§6), sizes | §13 | core |
 | `Mem` | Allocates every transient array and shared engine once; scratch ownership rules (§5.2) | §16.3 | core |
 | `Bytes` | Constant-time compare, wipe, `u16`/`u32` codecs, M2 pad/unpad | §1, §16.4 | core |
@@ -72,8 +73,11 @@ tests (§14); later stages may extend a class only as their acceptance tables st
 
 ```text
 process(apdu)
-├─ selectingApplet()                → Session.teardown(); 9000                 (select() also tears down)
+├─ selectingApplet()                → Session.teardown(); 9000                 (select() and deselect() also tear down)
 ├─ CLA ≠ 0x80                       → 6E00
+├─ init ≠ INIT_DONE (coded, read    → INS GET_IDENTITY: run exactly one §4.3 step, then 6283
+│    twice like life)                     while steps remain; every other INS → 6283;
+│                                         a non-member or disagreeing init → 6F00
 ├─ INS 0xE0 GET_IDENTITY            → Identity
 ├─ INS 0xE2 PERSONALIZE             → Identity            (T-PERSO)
 ├─ INS 0x10 OPEN                    → Session.open
@@ -106,7 +110,16 @@ APDU buffer.
 A transient coded flag that reads `0x0000` is the platform-cleared state — no session, not
 verified, no pending state (a failed `SELECT FILE` also clears `CLEAR_ON_DESELECT` without
 calling `select()`); `0x0000` is the only accepted value outside the code set and selects the
-safe branch rather than `6F00` (audit-impl F-19).
+safe branch rather than `6F00` (audit-impl F-19). `deselect()` runs the same §8.5 teardown as
+`select()` — defence in depth, since the NDEF applet shares the wallet's context and selecting
+it does not clear `CLEAR_ON_DESELECT` memory; no property depends on the call being made. The
+transient EC curve domains die with the selection epoch regardless; `select()` re-loads them
+(§5.5).
+
+The constructor writes nothing: it allocates the whole object graph (keys, engines, arrays —
+"no allocation after install" holds) and calls `register`. Every persistent write the old
+constructor did is a §4.3 initialisation step now — card A journals `install()` and the old
+writes overflowed its 5,120 B journal (`install-diag/NOTES.txt`).
 
 A `PACE_GM`/`PLAIN_XY` `CryptoException` on an infinite result during BIP-32 child computation
 maps to `6A80` (invalid child, §10.3), not `6F00` (audit-impl F-13). The `6F00` mapping is
@@ -114,13 +127,14 @@ otherwise unchanged.
 
 ## 4. Persistent state
 
-Every field of `protocol.md` §4.2 that is not a key object lives in one persistent `byte[272]`
-array `state`, allocated by `State` in the constructor:
+Every field of `protocol.md` §4.2 that is not a key object lives in one persistent `byte[274]`
+array `state`, allocated by `State` in the constructor (the constructor writes nothing — the
+zero-filled array reads `init = 0`, the first initialisation step):
 
 | Offset | Length | Field | Representation | Owner |
 | --- | --- | --- | --- | --- |
 | 0 | 2 | `life` | coded `short` | `Wallet` (`Identity` writes `BLANK` in T-PERSO) |
-| 2 | 4 | `fails` | `f ‖ ~f`; `fails ← 0` writes `0000 FFFF` (also in the constructor) | `Wallet` |
+| 2 | 4 | `fails` | `f ‖ ~f`; `fails ← 0` writes `0000 FFFF` (also at initialisation) | `Wallet` |
 | 6 | 2 | `origin` | coded `short` | `Wallet` |
 | 8 | 2 | `offer` | coded `short` | `Transfer` |
 | 10 | 4 | `edCounter` | `u32` | `Ed25519` |
@@ -129,6 +143,7 @@ array `state`, allocated by `State` in the constructor:
 | 95 | 64 | `ct` | | `Wallet` |
 | 159 | 16 | `tag` | | `Wallet` |
 | 175 | 97 | `cert` | | `Identity` |
+| 272 | 2 | `init` | coded `short`: next initialisation step `0 … 6`, then `INIT_DONE = 0x9966` | `WalletApplet` (the step dispatcher) |
 
 Key objects:
 
@@ -137,7 +152,7 @@ Key objects:
 | `idKey` | `KeyPair(ALG_EC_FP, 256)`, private `TYPE_EC_FP_PRIVATE` | `Identity` |
 | `caKey` | `ECPublicKey` (secp256k1 domain) | `Identity` |
 | `wrapKey` | `AESKey` `TYPE_AES`, 128; in `BLANK` it holds a random key unrelated to any ciphertext (T-ERASE installs it inside the transaction) | `Wallet` |
-| `linkKey` | `KeyPair(ALG_EC_FP, 256)`; T-CREATE/T-INSTALL overwrite the private key with a fresh random scalar (`setS`) inside the transaction | `Transfer` |
+| `linkKey` | `KeyPair(ALG_EC_FP, 256)`; T-CREATE/T-INSTALL/T-ERASE overwrite the private key with a fresh random scalar (`setS`) inside the transaction | `Transfer` |
 | peer-key slots 0, 1 | two `ECPublicKey` (secp256k1 domain), state-free (`protocol.md` §16.1 item 1) | `Transfer` |
 
 One array for every non-key field is the simplest layout in which each named transaction touches a
@@ -145,42 +160,66 @@ single array: `life`, `fails`, `offer` and `members` are each written by several
 with different field sets (audit-final F-15). The array's physical page alignment is unknown, so
 each transaction is charged two array pages: with card A's page-granular commit buffer (512 B
 per array page and per `setKey`/`setS`, 1,024 B per `setW`/`genKeyPair`, audit-impl F-12) the
-worst case is T-PERSO, T-CREATE, T-INSTALL and T-OFFER at 2,048 B (40 %), T-CHANGE and T-ERASE
-at 1,536 B, T-FAIL, T-OK and T-EDCTR at 1,024 B (B2, "Commit-buffer use"). There is no
-`clearKey` anywhere (§16.1). The constructor generates `idKey` and an initial `linkKey`
-(`genKeyPair`) and sets `fails ← 0`, `offer = NONE`, `life = FACTORY`. Each transaction of `protocol.md` §4.3 is one method
+worst case is T-PERSO, T-CREATE, T-INSTALL, T-ERASE and T-OFFER at 2,048 B (40 %), T-CHANGE
+at 1,536 B, T-FAIL, T-OK and T-EDCTR at 1,024 B (measured by `CommitCapacityTest`). Card A's
+memprobe charges the transactions one card can reach no higher — T-PERSO 1,536, T-CREATE
+2,048, T-ERASE 2,048, T-OFFER 2,048, T-CHANGE 1,024, T-FAIL/T-OK/T-EDCTR 512 B
+(`memory.json`); T-INSTALL needs a second card and is not measured on silicon — the simulator
+model is deliberately the conservative bound. There is no
+`clearKey` anywhere (§16.1). Initialisation (`protocol.md` §4.3) runs in `N = 7` steps, each a
+method on the class that owns the objects, dispatched by `WalletApplet` on `init`; `init`
+advances by one atomic `Util.setShort` only after the step completed, and `INIT_DONE` is written
+last (`INIT_DONE` is an RM(1,4) codeword whose Hamming distance to every step index is ≥ 5):
+
+| `init` | Step | Owner |
+| --- | --- | --- |
+| 0 | secp256k1 domain on `idKey` (both halves) and `caKey` | `Identity.initDomains` |
+| 1 | secp256k1 domain on `linkKey` and both peer slots; peer `setW(G)` | `Transfer.initDomains` |
+| 2 | secp256k1 domain on the four verify keys | `Ecdsa.initDomains` |
+| 3 | RSA moduli and exponents | `ModArith.initKeys` |
+| 4 | `idKey.genKeyPair()` | `Identity.initKeys` |
+| 5 | `linkKey.genKeyPair()` | `Transfer.initLink` |
+| 6 | random `wrapKey`; `fails ← 0`; `offer = NONE`; `life = FACTORY` | `Wallet.initState` |
+
+Each transaction of `protocol.md` §4.3 is one method
 that begins, writes and commits, with no other persistent write inside or outside it.
 
 ## 5. Memory
 
 ### 5.1 Budget (J3R180)
 
-Per-object sizes measured on card A (audit-impl `memory.out`); totals from B2.
+Transient sizes measured in the simulator (sizes from card A); the persistent column stays an
+estimate where nothing measures it.
 
 | Class | Transient (`CLEAR_ON_DESELECT`) | Persistent (objects and arrays) |
 | --- | --- | --- |
-| `Session` | 4 AES transient keys 128; counter, `verified`, `waited`, stream/export/import state words 11 → **139** | key headers 160 |
-| `State` | — | `state` 272 (§4) |
-| `Wallet` | session seed 64 → **64** | `wrapKey` 72 |
-| `Derivation` | secp256k1 cache 138; ed25519 cache 105; working node 101; HMAC pad 192 → **536** | — |
+| `Session` | 4 AES transient keys 128; record engines: 3 AES-CBC 144, 2 CMAC 64; counter, `verified`, `waited`, stream/export/import state words 10 → **346** | key headers 160; engine objects 500 |
+| `State` | — | `state` 274 (§4) |
+| `Wallet` | session seed 64; wrap keys `K_enc`, `K_mac` 2 × 32 (in `Mem`) → **128** | `wrapKey` 72 |
+| `Derivation` | secp256k1 cache 170 (parent key uncompressed); ed25519 cache 105; working node 101; HMAC pad 192 → **568** | — |
 | `ModArith` | scratch: 2 × 64 RSA in/out, 4 × 32 operands → **256** | 4 RSA-512 private keys `(ℓ,2)`, `(n,2)`, `(p,2)`, `(p,(p+1)/4)` → **736** |
 | `Secp256k1` | transient EC private key 272; 2 × 65 point scratch 130; ECDSA `Signature` 112 → **514** | key header 84; constants 200 |
 | `Wei25519` | transient EC private key 272 → **272** | key header 84; constants 220 |
-| `Ed25519` | stream: `a` 32, `r` 32, `R`, `A` points 130 → **194** (no encoding on the card) | — (`edCounter` in `state`) |
-| `Transfer` | pending sender ID 16; 2 scratch AES keys 64 → **80** | `linkKey` 772; 2 peer-key slots 760; key headers 80 |
+| `Ed25519` | stream: `a` 32, `r` 32, `R`, `A` points 130 → **194** (in `Mem`, no encoding on the card) | — (`edCounter` in `state`) |
+| `Transfer` | pending sender ID 16; 2 scratch AES keys 64 (in `Mem`) → **80** | `linkKey` 772; 2 peer-key slots 760; key headers 80 |
 | `Identity` | — | `idKey` 772; `caKey` 380 |
 | `Ecdsa` | — | 4 rotating verify keys 1,520 (§5.4) |
 | `Mem` (shared engines) | AES-CBC 48; CMAC 32; SHA-256 128; SHA-512 208 → **416** | engine objects 400 |
-| `NdefApplet` | selected file 2 | CC + message ≤ 115 |
-| **Total** | **2,473** of 3,990 → margin 1,517 B (38 %) | **≈ 6.6 KB** + CAP ≈ 24 KB of 157,524 B |
+| `NdefApplet` | selected file 2 | CC + message ≤ 117 |
+| **Total** | **2,776** of 3,990 → margin 1,214 B (30 %) | **≈ 7.1 KB** + CAP 27,643 B load components (the `qntx-card.cap` file is 132,813 B) of 157,524 B |
 
 Budget rule (acceptance): transient total ≤ 3,390 B (15 % margin on the 3,990 B JCAlgTest
 pool) as reported by the simulator's memory accounting (§8) and, on real cards, by
 `JCSystem.getAvailableMemory` after install (§10). The pool measured on card A is ≈ 4,130 B
-(audit-impl §6). Commit capacity is consumed per page: 512 B per array page and per
+(audit-impl §6): the final card-A run leaves 1,328 B of the 4,128 B `CLEAR_ON_DESELECT` pool free
+after install (32 %) against the simulator's 2,776 B used, and the production install consumes
+7,064 B of persistent memory (`memory.json`) against the ≈ 7.1 KB estimate above. The install
+journal charge is 0 B on card A (`install-journal.json`), which calibrates
+`INSTALL_ALLOC_CHARGE = 0` (§8 patch 2). Commit capacity is consumed per page: 512 B per array page and per
 `setKey`/`setS`, 1,024 B per `setW`/`genKeyPair` on card A (audit-impl F-12); every named
 transaction MUST consume ≤ 50 % of `getMaxCommitCapacity`, and the single-array layout of §4
-keeps every named transaction ≤ 2,048 B (40 %) at the worst-case alignment (B2).
+keeps every named transaction ≤ 2,048 B (40 %) at the worst-case alignment (measured by
+`CommitCapacityTest`).
 
 ### 5.2 Scratch plan
 
@@ -195,11 +234,11 @@ Record plaintext is processed in place in the APDU buffer and overwritten after 
 
 ### 5.3 Node caches
 
-`Derivation` keeps one secp256k1 entry (path, private key, chain code, compressed public key of
+`Derivation` keeps one secp256k1 entry (path, private key, chain code, uncompressed public key of
 the parent of the most recently derived leaf) and one ed25519 entry (path, key, chain code of
 the parent). A request whose path minus its last index equals the cached path costs one
 HMAC-SHA512. Caches live in `CLEAR_ON_DESELECT`, are wiped by `VERIFY` (step 1), `ERASE`,
-`IMPORT P1=1` and teardown, and never change outputs. Hosts that order PSBT inputs by path get
+a successful `IMPORT P1=1` and teardown, and never change outputs. Hosts that order PSBT inputs by path get
 one HMAC per input (B2: warm cache, 222 ms per segwit input, 535 ms per taproot input).
 
 ### 5.4 NVM writes and wear
@@ -208,13 +247,14 @@ one HMAC per input (B2: warm cache, 222 ms per segwit input, 535 ms per taproot 
 | --- | --- |
 | `VERIFY` | T-FAIL (4 B), T-OK (4 B) |
 | `WAIT` | none |
-| `SIGN_ECDSA` | one `setW` (65 B) on one of 4 verify keys chosen at random |
+| `SIGN_ECDSA` | one `setW` (65 B) on one of 4 verify keys, chosen uniformly at random by one random byte `& 3` (no state kept) |
 | `SIGN_ED25519` begin | T-EDCTR (4 B) |
 | `EXPORT` `P1=0`, `IMPORT` `P1=0` | one `setW` on the peer's slot, skipped when the slot already holds that key |
-| `CREATE`, `IMPORT` `P1=1`, `ERASE` | one transaction each, incl. `setKey`/`setS` (T-ERASE installs a fresh random `wrapKey`; T-CREATE/T-INSTALL overwrite the link private key inside the transaction) |
+| `CREATE`, `IMPORT` `P1=1`, `ERASE` | one transaction each, incl. `setKey`/`setS` (T-ERASE installs a fresh random `wrapKey`; T-CREATE/T-INSTALL/T-ERASE overwrite the link private key inside the transaction) |
 | `CHANGE`, `PERSONALIZE` | one transaction each |
 | `OFFER` | one transaction (T-OFFER) only when `offer = NONE`; nothing while the offer is valid |
 | `OPEN`, `STATUS`, `PUBLIC_KEY`, `SIGN_BIP340`, update/finish | none |
+| `GET_IDENTITY` on an uninitialised card | one §4.3 step's writes, once per card per step — outside any transaction, so a torn step is repeated whole (the writes above the tear are done again) |
 
 The session ephemeral is generated by `x·G` into the transient private key, never by
 `genKeyPair` on persistent objects (RP §2.7, §4.1). Endurance is 200k–500k cycles per cell
@@ -265,6 +305,10 @@ the implementation so that the result cannot affect the wire.
   4 as two modular halvings). Every operand is reduced below `m` in constant time before
   `doFinal` (`a + b` conditional subtraction of `m`, `a − b + m`): card A rejects inputs ≥ `m`
   (audit-impl F-14).
+- A transient EC key holds its domain parameters only for the selection epoch: deselection or
+  reset clears value and domain (card A, `probe-transient-reselect`), so `select()` re-loads
+  both domains every time — `setS` on a domainless key throws `CryptoException`
+  `ILLEGAL_VALUE` (§8 patch 13).
 
 ## 6. Countermeasure placement
 
@@ -282,21 +326,26 @@ Coded constants (RM(1,4) codewords, pairwise Hamming distance ≥ 8, generated a
 
 | Countermeasure (`protocol.md`) | Where |
 | --- | --- |
+| `init` gate: the coded value is read once; `INIT_DONE` re-read for agreement, a step index re-checked on the `GET_IDENTITY` path (`INIT_DONE` there → `6F00`); a non-member value → `6F00` (§16.2.1) | `WalletApplet.dispatch` |
 | Lifecycle check with coded value, evaluated twice for `PERSONALIZE`, `CREATE`, `OFFER`, `IMPORT`, `ERASE`; any non-member value → `6F00` (§16.2.1) | `WalletApplet.inner` step 3; `Identity`, `Wallet`, `Transfer` before every T-* transaction |
-| `verified` check at dispatch and again before output (§16.2.4) | `WalletApplet.inner` step 6; `Derivation.publicKey`, `Ecdsa`, `Bip340`, `Ed25519` finish, `Wallet.change`, `Wallet.erase` (before T-ERASE), `Transfer.export1` immediately before writing the response |
+| `verified` check at dispatch and again before output (§16.2.4) | `WalletApplet.inner` step 6; `Derivation.publicKey`, `Ecdsa`, `Bip340`, `Ed25519.begin` (before T-EDCTR), `Ed25519.finish` (before `le32(S)`; `update` has no effect beyond hashing, the dispatch gate only), `Wallet.change`, `Wallet.erase` (before T-ERASE), `Transfer.export1` immediately before writing the response. In `Ecdsa`/`Bip340` the self-verification `setW` on a verify key precedes the second-level check: under a single fault that forced the dispatch gate in an unverified session the card may write one public, stateless verify key — absent faults no unverified write happens (§16.1 item 7) |
 | `fails` read twice independently into `f_a`, `f_b` (two separate reads of the persistent array, each with its complement check); the `f ≥ L` re-entry erase evaluated once on each (coded) at `VERIFY` step 2 | `Wallet.verify` |
 | T-FAIL writes `f_a + 1` and commits; then the read-back gate evaluated twice independently, each on a fresh read and each a coded result: `getTransactionDepth() = 0`, value/complement consistent, value `= f_b + 1`, value `≤ L`; any failure → `abortTransaction` if a transaction is open, then T-ERASE + `6F00`; the candidate is never used (§16.1.2, §16.2.2) | `Wallet.verify` |
+| T-EDCTR read back (transaction closed, stored `edCounter = N`) before `r` is computed (§16.1 item 3) | `Ed25519.begin` |
+| T-OFFER read back (transaction closed, stored `offer = VALID`) before `LK` is output (§16.1 item 4) | `Transfer.offer` |
 | `WAIT` gate before the comparison once `f_a ≥ F` (§9.5): a single check — a skipped wait yields at most one unwaited attempt and the guess bound stays `L` | `Wallet.verify` |
 | Two-branch structure for T-OK: two independent `KDF108` + CMAC computations; T-OK, seed decryption and `verified` are reachable only through two independent branches whose fall-through path is failure; each compares a coded result with `CHECK_OK` (§16.2.3) | `Wallet.verify` |
 | Seed fingerprint: after a match, `fp'` recomputed and compared with the stored `fp` (constant time, twice) before T-OK (§9.5 step 8) | `Wallet.verify` |
 | Every signature/MAC/certificate verification result as `CHECK_OK`/`CHECK_FAIL`, checked twice | `Identity.verify`, `Transfer`, `Session.unwrap` |
-| Double coded checks on every check that guards a persistent write or a seed-derived output (§16.2): `EXPORT` membership and certificate, `IMPORT` equality checks in `LOADED` | `Transfer` |
-| Self-verification of every signature (§16.2.5): detects faults in the signing computation; for hardened ECDSA leaves and Ed25519 it does not detect a fault that rewrote the private key before signing — the host's check against the cached public key does | `Ecdsa` (leaf public key via `PACE_GM(IL, K_par)` for non-hardened leaves), `Bip340` (`Q = P_even + t·G` via `PACE_GM`; check `s·G + (−e·Q) = R`), `Ed25519` (`S·B + (−k·A) = R`) |
+| Double coded checks on every check that guards a persistent write or a seed-derived output (§16.2): each certificate, signature and MAC verification is computed once and its coded result is compared at its checking-order position (`6A80`), then the guards are evaluated twice immediately before the effect (`6F00`): `EXPORT` `P1 = 0x00` — certificate and membership (recomputed) before the pending export and `E`; `IMPORT` `P1 = 0x00` — certificate and, when not `BLANK`, membership before the peer-slot `setW`; `IMPORT` `P1 = 0x01` — MAC and, when not `BLANK`, the three re-seal equality checks (recomputed) plus `life` equal to the value read at the start, before T-INSTALL; `OFFER` — `life` before T-OFFER; `EXPORT` `P1 = 0x01` — `verified` before the payload; the `LOADED`-only checks are written `if (life != BLANK)` so a skipped branch enters them | `Transfer` |
+| Self-verification of every signature (§16.2.5): detects faults in the signing computation; for hardened ECDSA leaves and Ed25519 it does not detect a fault that rewrote the private key before signing — the host's check against the cached public key does; the result is computed once and evaluated twice, so a forced result needs a second, matching fault in the signing computation | `Ecdsa` (leaf public key via `PACE_GM(IL, K_par)` for non-hardened leaves), `Bip340` (`Q = P_even + t·G` via `PACE_GM`; check `s·G + (−e·Q) = R`), `Ed25519` (`S·B + (−k·A) = R`) |
 | Share masking of secret products with the §16.2.6 order: `s = ((k + e·d₁) mod n + e·d₂) mod n`, `S = ((r + k·a₁) mod ℓ + k·a₂) mod ℓ`; `d₁`, `a₁` fresh uniform per signature; no intermediate equals `e·d` or `k·a` | `ModArith.mulMasked`, used by `Bip340` and `Ed25519` |
 | Structural binding of the seed to the code (D6) | `Wallet.verify`/`unwrap` decrypt only after `CHECK_OK` |
 | Constant time (§16.4); every RSA operand reduced below the modulus in constant time before `doFinal` | `Bytes.equal`, `ModArith` (fixed loop bounds, masks instead of branches) |
 | Point rule (§16.5): explicit on-curve check; decompression `y = (x³+7)^((p+1)/4)` with `y²` check and parity (§10.5) | `Secp256k1.onCurve`/`decompress` used by `Transfer.export0`/`import0`; `Identity.personalize` checks `caKey` explicitly |
 | Teardown wipe order (§8.5) | `Session.teardown` |
+
+A failed re-evaluation behind a passed dispatch gate returns `6F00`.
 
 ## 7. Build system and toolchain
 
@@ -308,7 +357,9 @@ Coded constants (RM(1,4) codewords, pairwise Hamming distance ≥ 8, generated a
 - Spotless (google-java-format 1.35.0, ktlint 1.8.0), REUSE lint, CycloneDX 3.2.4 SBOM.
 - Libraries: jcardsim fork (vendored, §8), BouncyCastle 1.84 (host, tests), JUnit 6.0.3,
   jackson-jr 2.19.1 (vectors), PIT (mutation, `tests`), Jazzer (fuzz, `tests`), picocli 4.7.7,
-  apdu4j and GlobalPlatformPro 26.04.20.1 (`tools`). Versions pinned in
+  apdu4j and GlobalPlatformPro 26.04.20.1 (`tools`; GlobalPlatformPro is also the test oracle of
+  the simulated ISD in `sim` tests), Shadow 9.6.1 (`card-sim.jar`), slf4j 2.0.18 (`slf4j-nop` in
+  `tools`). Versions pinned in
   `gradle/libs.versions.toml`; new versions at least 7 days old.
 - Applet code rules: no allocation after install, no recursion, no `String`, `int`, floats or
   multi-dimensional arrays; exceptions only `ISOException` for control flow; every secret buffer
@@ -333,6 +384,18 @@ deviation table:
    test suite asserts every named transaction ≤ 2,560 B (`protocol.md` §3 item 8).
    `beginTransaction` with a transaction open throws `TransactionException` `IN_PROGRESS`.
    A persistent-write counter per command is exposed to the tests.
+   The same charging applies to the install phase: `Phase.INSTALL` writes (array spans, key
+   setters, `setW`/`genKeyPair`) count against the same 5,120 B — card A's install journal —
+   and install throws `TransactionException` `BUFFER_FULL` beyond it; nothing is journaled for
+   rollback (a failed install is discarded whole). The charge is exposed as
+   `Card.installBytes()`; `InstallJournalTest` asserts both applets ≤ 3,072 B and that a
+   test-only applet replaying the pre-F1 constructor fails with `BUFFER_FULL`, while the
+   real-card suite measures the charge with the memprobe (`install-journal.json`, §10).
+   Allocations (`buildKey`, `new`, `makeTransient*`, `getInstance`) charge the single constant
+   `INSTALL_ALLOC_CHARGE`, 0 — measured on card A: allocations are not charged to the install
+   journal (`install-journal.json`).
+   `<clinit>` is not woven (patch 5's agent skips it): the constants it fills are CAP-loaded
+   bytes, not runtime persistent writes.
 3. Auto-abort: when `process` returns with a transaction still open, the runtime aborts it and
    the response returns `6F00`; data already sent stays delivered (card A behaviour, JCRE 3.2
    §7.6.2).
@@ -348,10 +411,36 @@ deviation table:
    the measured per-object sizes of §5.1; install fails above 3,990 B; the report is printed by
    the build.
 7. `CLEAR_ON_DESELECT` per context (verified upstream behaviour, RP §7.3).
+8. Call skipping, counting and store faults: the agent guards every call from applet code to a
+   void applet method and to `JCSystem.begin/commit/abortTransaction` with `Fault.skip`; a test
+   arms the n-th call to be skipped, and `Fault.countCalls`/`calls` counts the same sites without
+   arming (the teardown test counts `Session.initEngines` to prove the record engines are
+   re-armed on the zeroed keys). `Fault.armStore(n, v)` makes the n-th persistent
+   `Util.setShort` store `v`.
+9. `MessageDigest` operations are counted per algorithm per command (`Card.digests`), so tests
+   can assert the `WAIT` iteration count (§14.4 W3) and HMAC counts of the node cache.
+10. Fixed randomness: `Rng.fix(block)` makes every `RandomData` output of applet engines start
+    at `block[0]` for each call (cyclic beyond its length) until `Rng.reset()`, so tests
+    reproduce the exact signatures of `bip340.json` (fixed `aux`) and `ed25519.json` (fixed
+    `Zr`).
+11. ECDSA output fault: `Fault.armEcdsaFlip(n)` xors the last byte of the n-th ECDSA signature
+    output of applet engines since arming (a fault inside the platform signing computation).
+12. Key generation seeds: each `SecureRandomNullProvider` (behind `genKeyPair`) is seeded with 8
+    bytes of OS randomness, so simulated cards have distinct identity and link keys.
+13. Transient EC domains: `Memory.buildKey` registers every transient EC private key the applet
+    builds, and `CardRuntime` clears them — value and domain — on applet deselection (the
+    `TRANSIENT_DESELECT` keys) and on card reset (both transient kinds), matching card A
+    (audit-impl `probe-transient-reselect`); `ECPrivateKeyImpl.setS` on a key without domain
+    parameters throws `CryptoException` `ILLEGAL_VALUE`. The wallet applet re-loads both domains
+    in `select()` (§5.5).
 
 Server: `org.qntx.card.sim.Server` listens on TCP, one port per simulated card, framing as
-vsmartcard vpcd (2-byte big-endian length, then the APDU; length 0 with a control byte for power
-on/off and "tear at write N"). Distribution: `card-sim.jar` (simulator + applet classes, one
+vsmartcard vpcd (2-byte big-endian length, then the payload): length ≥ 4 is an APDU; length 1 is
+a vpcd control (`00` off, `01` on, `02` reset, `04` ATR); length 3 `10 ‖ u16(N)` arms power loss
+at the N-th persistent write of the next command that makes N writes. A torn APDU, or an APDU on
+an unpowered card, is answered with an empty frame. `--state empty|factory|blank`; cards also
+carry a simulated issuer security domain (SCP03 `i = 00`, GP test keys) so the tools run against
+the simulator (README "Simulator"). Distribution: `card-sim.jar` (simulator + applet classes, one
 fat jar), released with every tag with its SHA-256 and build provenance; the qntx/wallet CI pins a
 version and checksum (`host.md` §8), so `card-sim.jar` inherits these semantics and wallet CI
 never sees a divergence the real card would reject (audit-impl F-6).
@@ -378,43 +467,87 @@ details), RF behaviour, GlobalPlatform. These are the real-card suite (§10).
 ## 10. Real-card suite and silicon admission
 
 Run on each silicon batch and before the protocol freeze; results recorded in the batch record.
+The suite lives in `tests/src/realCard`: JUnit 6 classes under `java/` and the test-only
+card-side artifacts under `javacard/` — the §3 admission probe (`probe/`, package
+`F0716E7478FF`, applet `F0716E7478FF01`, CAP `tests/build/cap/qntx-probe.cap`) and the memprobe
+(`memprobe/`: `MemProbe.java` plus `memprobe.patch` applied to a copy of the applet sources at
+build time, CAP `tests/build/cap/qntx-memprobe.cap`; the production sources stay untouched and
+the build fails if the patch no longer applies). Neither CAP is part of a release artifact; the
+prebuilt production CAP is checked before install (`-PrealCardCap`, sha256 printed by the task)
+and the suite asserts `qntx-card.cap` never contains `MemProbe`.
 
-| Test | Measures / asserts |
-| --- | --- |
-| Admission 1 | `ALG_RSA_NOPAD` with zero-extended 512-bit moduli and exponents `2` and a 32-byte exponent: results equal BigInteger for 1,000 random inputs per modulus; every input ≥ `m` is rejected |
-| Admission 2 | `ALG_EC_PACE_GM` output is the 65-byte point `s·G' + H` (secp256k1 and Wei25519); an infinite result throws `CryptoException` |
-| Admission 3 | `PLAIN_XY` 65-byte product; rejects off-curve, `x ≥ p` and compressed inputs — rejection is REQUIRED, the protocol relies on it (§3) |
-| Admission 4 | `signPreComputedHash`, `verifyPreComputedHash` on 32-byte hashes |
-| Admission 5 | Wei25519 and secp256k1 domains accepted by 256-bit keys and transient keys |
-| Admission 6 | RandomData: NIST SP 800-22 subset on 10 MB from `ALG_KEYGENERATION`; the first 32-byte output after each of 100 power-ups is pairwise distinct |
-| Admission 7 | Persistent key objects `setKey`/`setS`/`setW`/`setExponent`/`genKeyPair` participate in transactions (abort restores the previous value) |
-| Admission 8 | Every named transaction consumes ≤ 50 % of `getMaxCommitCapacity`, measured with `getUnusedCommitCapacity`; `getAvailableMemory(CLEAR_ON_DESELECT)` after install ≥ 15 % of the pool |
-| Admission 9 | One `WAIT` unit takes 0.9–1.1 s on a contactless reader (median of 9; card A predicted 965 ms from the measured 2.370 ms per iteration) |
-| Timing | Every command of `protocol.md` §16.6 on a contact and an NFC reader; assert ≤ 1,500 ms; record vs B2 |
-| APDU | `Lc = 248` receive test (the `setIncomingAndReceive` + `receiveBytes` loop of §3) |
-| Flows | The flows of B2 on iOS and Android with the wallet harness (taps, seconds); before freeze also: `WAIT` time on each reference phone at the weakest usable coupling, the iOS single-connection limit (15 `WAIT` + `VERIFY` must complete in one connection), the displayable length of the iOS `alertMessage` (`host.md` §3) and native Argon2id time on the slowest supported phone (`$A/spec/FROZEN.md`) |
-| Tearing | Field cut at programmable instants during `VERIFY`, `CREATE`, `IMPORT`, `ERASE` (requires a programmable reader); assert post-states |
-| NVM | Write time of the transactions; endurance after 10⁶ `setW` on one key object, 10⁶ T-FAIL/T-OK and 10⁵ T-OFFER, with all other transactions still committing afterwards (sacrificial card — never development card A; mandatory before freeze) |
+The suite is gated by `-PrealCard=<reader>` (PC/SC terminal name); without a reader every test
+is skipped as "not run" and `-PrealCardList` enumerates the suite as skipped without touching
+hardware. `Fixture` manages one card per run: it installs the CAPs with the `gp` wrapper
+(`-Pqntx.gp`), reuses the wallet across tests to stay inside the wear allowance, and deletes
+the qntx AIDs in `@AfterAll` unless `-PrealCardKeep`. Card identity is checked before any
+install: the ATR, the ISD's CPLC and the JCOP IDENTIFY build string must name a development
+card of `REALCARD.md`, never a production batch.
 
-Admission rows 1–9 are `protocol.md` §3 items 1–9. Audit-impl ran admission 1–5 and 7 on development card A (JCOP4 P71, CPLC IC type `D321`, batch
-`2092`) and they passed (`$A/audit-impl/evidence/card/functional.out`); admission must be
-repeated on each production batch. Multi-card flows are simulation-only while only one
-development card exists.
+| Code under test | Real-card test | Packet / files / assertions |
+| --- | --- | --- |
+| dispatch, §6 SELECT, §7, §8 records | `CoreRealCardTest` | ATR + CPLC + JCOP IDENTIFY vs `REALCARD.md`; wrong CLA `6E00`, unknown INS `6D00`; identity is a stable on-card compressed key across a power cycle; PERSONALIZE gates and `6A80` rejects; OPEN `6985`/`6A86`, record-layer `6982`/`6985`, select and power-cycle teardown, OPEN across selection epochs (D2) |
+| §3 item 1 — `ALG_RSA_NOPAD` | `AdmissionRealCardTest` (`rsaNopadUnder256`) | probe `0x01/0x02/0x03`: 512-bit moduli, exponents 2 and 32-byte; 1,000 random inputs per modulus vs BigInteger; every input ≥ `m` throws |
+| §3 item 2 — `ALG_EC_PACE_GM` | `AdmissionRealCardTest` (`paceGmAndPlainXyOnBothCurves`) | probe `0x13` on secp256k1 and Wei25519: result is the 65-byte `s·G' + H`; an infinite result throws `CryptoException` |
+| §3 item 3 — `PLAIN_XY` | same test | probe `0x14`: off-curve, compressed and `x ≥ p` inputs are rejected — required by §3; valid input gives the 65-byte product |
+| §3 item 4 — `sign/verifyPreComputedHash` | `AdmissionRealCardTest` (`precomputedHashEcdsaSignsAndVerifies`) | probe `0x15/0x16`: card sign → host verify, host sign → card verify, corrupt signature rejected |
+| §3 item 5 — custom domains | `AdmissionRealCardTest` (`ecDomainsAcceptedOnEveryKeyKind`) | probe `0x10`: persistent, TRANSIENT_RESET/DESELECT keys and keypairs take both domains |
+| §3 item 6 — RandomData | `AdmissionRealCardTest` (`rngPassesStatisticsAndDoesNotRepeatAcrossPowerUps`) | probe `0x30`: `-PrealCardSequences` sequences of 10⁶ bits (default 80) through the SP 800-22 subset with the §4.2 two-level decision rule (per-statistic pass proportion and P-value_T); the first 32 bytes after each of 100 power-ups are pairwise distinct (`rng.json`, `rng.bin`) |
+| §3 item 7 — keys in transactions | `AdmissionRealCardTest` (`persistentKeySettersJoinAndAbortTransactions`) | probe `0x21`: `setKey`/`setS`/`setW`/`setExponent`/`genKeyPair` abort back to the previous value and commit persistently |
+| §3 item 8 — commit capacity | `AdmissionRealCardTest` (`platformEnginesAndCommitCapacity`), `MemoryRealCardTest` | probe `0x50` capscan reports `getMaxCommitCapacity`/`getUnusedCommitCapacity` (`commit-capacity.json`); memprobe `80 FE` reports `max − unused` before every commit of each named transaction — each ≤ 50 % (`memory.json`) |
+| §3 item 9 — WAIT unit | `TimingRealCardTest` | WAIT median of 20 runs ∈ [0.9, 1.1] s (`timing.json`, `timing.md`) |
+| §14.3 install, §4.3 init, §8.5 epochs | `InstallRealCardTest` | production CAP installs (registry = baseline + load file + instance); `GET_IDENTITY` polls return `6283` until `INIT_DONE` (bound 16, each ≤ 500 ms per §16.6, `init.json`); every other outer command answers `6283`; the memprobe twin reports the install journal charge ≤ 60 % of the commit capacity (`install-journal.json`); personalise, then `OPEN` ×3 across re-SELECTs and once across a power cycle; `qntx-card.cap` contains no `MemProbe` |
+| §16.6 command timing | `TimingRealCardTest` | every named command, 20 runs, host-clock median/max vs the B2 basis; every command ≤ 1,500 ms (`timing.json`, `timing.md`) |
+| platform primitives | `PrimitiveRealCardTest` | probe `0x60` (P1 = primitive, P2 = r): per-op cost = (t(r) − t(0)) / r over 20 medians at r ∈ {0, 4, 16} for the exact engine shapes the wallet uses — AES-CBC/CMAC, SHA-256/512, the RSA square, `setS`/`setW`/`setDomain`, `PLAIN_XY`/`PACE_GM`, precomputed-hash ECDSA, `nextBytes`, `arrayFillNonAtomic` and a `Bytes.equal`-style byte loop (`primitives.json`, `primitives.md`) |
+| §3 APDU `Lc = 248` | `SignRealCardTest` (`ed25519ChunkBoundaries`) | a 236-byte inner chunk is the largest record that fits `Lc = 248`; maximal updates + empty finish verify |
+| §9.5/§9.6 wallet | `WalletRealCardTest` | lifecycle and the failure-limit story (~110 real WAITs, run once); derivation vectors of `derivation.json` |
+| §12 signing | `SignRealCardTest`, `DifferentialRealCardTest` | every signature verified against vector/host key material (platform RNG forbids vector equality); `qntx.realcard.differential` signatures (default 1,000) written in the noble verify format (`signatures.json`) |
+| memory | `MemoryRealCardTest` | install/init/current pools, per-step §4.3 deltas, DESELECT pool ≥ 15 % free after init (`memory.json`) |
+| flows (B2) | `FlowRealCardTest` | `unavailable` until the phone harness lands — before freeze |
+| tearing | `TearingRealCardTest` | `unavailable` until a programmable reader exists — before freeze |
+| NVM endurance | `NvmRealCardTest` | `unavailable` until a sacrificial card exists — before freeze, never a development card |
+
+Rows 1–9 are the admission items of `protocol.md` §3. Evidence lands under `-PrealCardOut`
+(default `tests/build/realcard/`): the `*.json`/`*.bin` reports above plus `apdu.log`,
+`gp-*.log` and `cplc.bin`, which feed the batch record. Audit-impl ran admission 1–5 and 7 on
+development card A (JCOP4 P71, CPLC IC type `D321`, batch `2092`) and they passed
+(`$A/audit-impl/evidence/card/functional.out`); admission must be repeated on each production
+batch. Multi-card flows are simulation-only while only one development card exists.
+
+Final card-A run (2026-11-23, CAP sha256 `a6e9d2f2…034417e5f`): the whole suite passed once,
+62 tests green, flows/tearing/NVM rows `unavailable` as designed; admission 6 ran the full
+§4.2 decision rule (80 × 10⁶ bits, every statistic's proportion and P-value_T inside bounds,
+`rng.json`); every timing row is inside its bound (`timing.md`, reproduced in the README);
+the install journal charged 0 B and `CLEAR_ON_DESELECT` shows 32 % free after init
+(`install-journal.json`, `memory.json`).
 
 ## 11. Tools
 
 `tools` builds `qntx-card` (picocli):
 
 - `install` — load and install the CAP over SCP02 (`i = 55`) or SCP03 as recorded for the batch
-  at admission (GlobalPlatformPro library), check the load-file hash against the release, and
+  at admission (GlobalPlatformPro library), check the load-file hash against the release,
   compare the registry with the admission baseline plus exactly the load file and the two
-  instances (`protocol.md` §14.3 steps 2, 3, 6).
-- `personalise` — `GET_IDENTITY`, obtain the certificate from the HSM interface (PKCS#11), send
-  `PERSONALIZE`, verify `OPEN`, replace ISD keys with discarded random keys, append the batch
-  record (steps 4–8). It records and prints the short ID `short(A)` (8 hex) that is printed on
-  the card face. A `--test-ca` mode uses a software test CA and refuses production anchors.
+  instances (`protocol.md` §14.3 steps 2, 3, 7), and drive §4.3 initialisation
+  (`Init.drive`: `SELECT` + `GET_IDENTITY` until not `6283`, bound 16), printing the number of
+  steps and each step's duration.
+- `personalise` — accept an uninitialised card and drive §4.3 initialisation first, then
+  `GET_IDENTITY`, obtain the certificate from the HSM interface (PKCS#11), send
+  `PERSONALIZE`, verify `OPEN`, perform the step-7 registry check, replace ISD keys with
+  discarded random keys, append the batch record (steps 4–10). It records and prints the short ID
+  `short(A)` (8 hex) that is printed on the card face. A `--test-ca` mode uses a software test
+  CA and refuses production anchors.
+- `registry` — print the registry (one sorted line per entry: kind, AID, lifecycle); admission
+  records it as the factory baseline of §14.3 step 6.
 - `shell` — debug REPL over PC/SC or the simulator TCP port using the `host` library: open a
   session, run inner commands, print decoded records. It never accepts or prints seeds.
+
+Transport keys (`QNTX_ISD_KEY`) and the HSM PIN (`QNTX_HSM_PIN`) are read only from the
+environment. HSM signing uses SunPKCS11 `NONEwithECDSA` over a software SHA-256: SunPKCS11 on
+JDK 25 with SoftHSM 2.7 fails `SHA256withECDSA` at `C_SignUpdate`
+(`CKR_OPERATION_NOT_INITIALIZED`) for secp256k1, and SunPKCS11's KeyStore exposes a private key
+only when a certificate with the same `CKA_ID` exists on the token; the production HSM's
+behaviour is UNVERIFIED.
 
 ## 12. CI and release
 
@@ -426,6 +559,9 @@ development card exists.
   `card-sim.jar`, `vectors.zip`, `tools` distribution, CycloneDX SBOM, `SHA256SUMS`; build
   provenance via `actions/attest-build-provenance`; release notes list the protocol version and
   the CAP hash. Permissions: `contents: write`, `id-token: write`, `attestations: write`.
+- Before any tag, the real-card gate of §10 — install the production CAP on card A, then `OPEN`
+  across three select epochs and a power cycle (`InstallRealCardTest`) — MUST have passed on the
+  tagged commit; CI cannot run it, so the result is recorded in the release notes.
 
 ## 13. Repository `AGENTS.md`
 
@@ -526,7 +662,7 @@ and no section appears twice; every class of §2 appears once.
 | --- | --- | --- |
 | W1 | `STATUS`, `CREATE`, `VERIFY`, `WAIT`, `CHANGE`, `ERASE`, `PUBLIC_KEY`: success path, every status word in checking order, every state | `WalletCommandTest` (from `apdu.json`) |
 | W2 | `VERIFY` tearing and the read-back gate: tear at every write of T-FAIL, T-OK, T-ERASE for every value of `f`; assert §9.5 (no uncounted comparison; the gate catches a skipped or uncommitted T-FAIL, then aborts before T-ERASE; re-entry at `f = L` erases) | `VerifyTearTest` |
-| W3 | Failure limit: 3 free attempts, then `6985` until 15 `WAIT`s per attempt, the 10th failure erases; 9 wrong + 1 right resets; `63Cx` values exact; every sequence of `verify-sequence.json`; `WAIT` runs exactly 400 SHA-256 iterations (counted by the simulator's `MessageDigest` call counter) | `FailureLimitTest` |
+| W3 | Failure limit: 3 free attempts, then `6986` until 15 `WAIT`s per attempt, the 10th failure erases; 9 wrong + 1 right resets; `63Cx` values exact; every sequence of `verify-sequence.json`; `WAIT` runs exactly 400 SHA-256 iterations (counted by the simulator's `MessageDigest` call counter) | `FailureLimitTest` |
 | W4 | `CREATE`, `CHANGE`, `ERASE` tearing at every write: state is either before or after the transaction | `WalletTearTest` |
 | W5 | `access.json`, `wrap.json`, `derivation.json` (BIP-32 vectors 1–5, SLIP-10 1–2, template paths, invalid child) pass via commands and unit tests | `VectorTest` |
 | W6 | Fault mutants (the primary fault evidence): deleting the T-FAIL call or `commitTransaction` is caught by the read-back gate (the latter ends in abort, T-ERASE, `6F00`); overwriting `f_a` after its complement check, or the value T-FAIL writes, is caught by the gate's comparison with `f_b + 1`; skipping the `f₀ ≥ L` test with `f = L`, forcing one comparison branch to pass, forcing the fingerprint check, skipping the `WAIT` gate (comparison count still ≤ L), skipping `ERASE`'s `verified` gate, skipping each `IMPORT` equality check in `LOADED` — each asserts no uncounted comparison, no T-OK, no output (P2/P3) | `FaultMutantTest` |
@@ -535,6 +671,9 @@ and no section appears twice; every class of §2 appears once.
 | W9 | PIT: no survivor in `Wallet.verify`, `Wallet.create`, `Wallet.erase`, `Derivation.publicKey` | PIT report |
 | W11 | Unverified writes on a `LOADED` card: for `STATUS`, `VERIFY` (wrong code), `WAIT` the persistent-write counter matches §16.1 item 7 | `UnverifiedWriteTest` |
 | W10 | `ERASE` refuses an unverified session (`6982`); the `IMPORT` equality checks in `LOADED` are covered in `sets` | `WalletCommandTest` |
+
+T-CREATE's link-key `setS` belongs to `Transfer` and was added by the `sets` stage inside the
+same transaction, raising T-CREATE's commit charge from 1,536 B to 2,048 B.
 
 ### 14.5 `sign`
 
@@ -566,7 +705,7 @@ and no section appears twice; every class of §2 appears once.
 | R1 | `NdefApplet`: §15 table, every status word; install rejects messages of 0 or > 100 bytes | `NdefTest` |
 | R2 | `card-sim.jar`: TCP framing, multi-card, power and tear control; an end-to-end test drives a 3-card creation and an Ed25519 signature over TCP with the `host` library | `ServerTest` |
 | R3 | `tools`: `install`, `personalise --test-ca`, `shell` work against the simulator and refuse production anchors in test mode | `ToolsTest` |
-| R4 | Real-card suite compiles and lists every test of §10; it is reported as "not run" without hardware | `./gradlew :tests:realCard --dry-run` |
+| R4 | Real-card suite compiles and lists every test of §10; it is reported as "not run" without hardware | `./gradlew :tests:realCard -PrealCardList` |
 | R5 | `release.yml` dry run produces CAP, `card-sim.jar`, `vectors.zip`, SBOM, `SHA256SUMS`, provenance | workflow run on a test tag in a fork |
 | R6 | Final budgets: memory report ≤ §5.1 total; CAP size reported; §16.6 time table reproduced from B2 in the README | build report |
 | R7 | Every vector file of §18 exists and both generators agree | CI `vectors` |

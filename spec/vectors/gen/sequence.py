@@ -94,7 +94,7 @@ class Card:
             self.erase()
             return "6983"
         if self.f >= F and self.waited < W:  # step 3: nothing written, waited kept
-            return "6985"
+            return "6986"
         self.waited = 0  # step 4
         self.f += 1  # step 5, T-FAIL
         if tear:
@@ -238,7 +238,7 @@ def sequences():
 
     s = Script(
         "wrong-to-limit",
-        "Wrong codes from f = 0 to L: three free attempts, then 6985 until W WAITs complete "
+        "Wrong codes from f = 0 to L: three free attempts, then 6986 until W WAITs complete "
         "in the session (a refused VERIFY keeps waited), then one attempt per W WAITs; the "
         "L-th failure erases. Afterwards VERIFY and WAIT are refused in BLANK.",
     )

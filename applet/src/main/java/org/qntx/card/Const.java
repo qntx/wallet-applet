@@ -23,6 +23,12 @@ final class Const {
     static final short SW_WRONG_CODE = (short) 0x63C0;
 
     /**
+     * §13.1: the instance exists but initialisation (§4.3) has not finished — ISO 7816-4 "selected
+     * file deactivated". The card answers every command but GET_IDENTITY with it.
+     */
+    static final short SW_NOT_INITIALISED = (short) 0x6283;
+
+    /**
      * Forces this class's initializer at install: the static arrays below must be written at
      * install, never lazily during a command.
      */
@@ -212,6 +218,17 @@ final class Const {
     static final short CHECK_FAIL = (short) 0x5AA5;
     static final short CHECK_OK = (short) 0x6666;
     static final short CHECK_MALFORMED = (short) 0x8888;
+
+    /**
+     * §4.3: the coded value the {@code init} field holds once every initialisation step ran — an
+     * RM(1,4) codeword, pairwise Hamming distance ≥ 8 to the other coded constants and ≥ 5 to every
+     * step index 0 … {@link #INIT_STEPS} − 1, which occupy the field until then.
+     */
+    static final short INIT_DONE = (short) 0x9966;
+
+    /** §4.3: the number of initialisation steps (indexes 0 … INIT_STEPS − 1 of {@code init}). */
+    static final short INIT_STEPS = 7;
+
     static final short SESSION_OPEN = (short) 0x6699;
     static final short PENDING_STREAM = (short) 0x6969;
     static final short PENDING_EXPORT = (short) 0x6996;
@@ -273,7 +290,7 @@ final class Const {
     static final short POINT_LEN = 65;
     static final short COMPRESSED_LEN = 33;
     static final short CERT_LEN = 97;
-    static final short STATE_LEN = 272;
+    static final short STATE_LEN = 274;
     static final short AES_KEY_LEN = 16;
     static final short HASH_LEN = 32;
 

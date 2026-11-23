@@ -47,7 +47,11 @@ public final class Memory {
         if (rt != null) {
             rt.chargeTransientKey(keyType, keyLength);
         }
-        return KeyBuilder.buildKey(keyType, keyLength, keyEncryption);
+        Key key = KeyBuilder.buildKey(keyType, keyLength, keyEncryption);
+        if (rt != null) {
+            rt.trackTransientEc(keyType, key);
+        }
+        return key;
     }
 
     public static Key buildKey(
@@ -56,7 +60,11 @@ public final class Memory {
         if (rt != null) {
             rt.chargeTransientKey(keyType, keyLength);
         }
-        return KeyBuilder.buildKey(keyType, keyAlgorithmType, keyLength, keyEncryption);
+        Key key = KeyBuilder.buildKey(keyType, keyAlgorithmType, keyLength, keyEncryption);
+        if (rt != null) {
+            rt.trackTransientEc(keyType, key);
+        }
+        return key;
     }
 
     public static Key buildKeyWithSharedDomain(

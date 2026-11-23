@@ -14,6 +14,7 @@ import org.qntx.card.Internals;
 import org.qntx.card.host.Ids;
 import org.qntx.card.host.Session;
 import org.qntx.card.sim.Card;
+import org.qntx.card.sim.Fault;
 
 /**
  * §8.5/§16.2: every teardown path zeroes the session words, the four AES keys, both scratch arrays
@@ -46,8 +47,13 @@ final class TeardownTest {
         assertArrayEquals(
                 new byte[16], (byte[]) Internals.memField(applet, "sender"), "sender not wiped");
         byte[] s = new byte[32];
-        Internals.ephKey(applet).getS(s, (short) 0);
-        assertArrayEquals(new byte[32], s, "ephemeral scalar not wiped");
+        try {
+            Internals.ephKey(applet).getS(s, (short) 0);
+            assertArrayEquals(new byte[32], s, "ephemeral scalar not wiped");
+        } catch (javacard.security.CryptoException e) {
+            // after a real deselection the platform has cleared the whole transient key —
+            // domain and value — which is dead state, not a leak
+        }
     }
 
     @Test
@@ -65,6 +71,18 @@ final class TeardownTest {
         Card card = Vecs.blankSelf();
         Vecs.open(card);
         card.applet(Spec.WALLET_AID).select();
+        assertDead(card);
+    }
+
+    @Test
+    void deselectCallTearsTheSessionDown() throws Exception {
+        // §8.5: deselect() itself runs the teardown — called in-process there is no
+        // platform clearing to mask it
+        Card card = Vecs.blankSelf();
+        Session session = Vecs.loadWallet(card);
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x22, 0, 0, Vecs.accessHash()).sw());
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x33, 0, 0, Vecs.pathEdSolana()).sw());
+        card.applet(Spec.WALLET_AID).deselect();
         assertDead(card);
     }
 
@@ -293,6 +311,50 @@ final class TeardownTest {
         }
         for (int i = 0; i < 32; i++) {
             assertEquals(0, w[x + i], "W_X not wiped");
+        }
+    }
+
+    @Test
+    void recordWorksAfterTeardownAndReopen() throws Exception {
+        // §8.5 + the record engines: a torn-down session must leave nothing that breaks the
+        // next OPEN — engines re-armed on zeroed keys, then on the new session keys
+        Card card = Vecs.blankSelf();
+        Session session = Vecs.open(card);
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x20, 0, 0, new byte[0]).sw());
+        card.transmit(Spec.SELECT);
+        session = Vecs.open(card);
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x20, 0, 0, new byte[0]).sw());
+    }
+
+    @Test
+    void recordRefusedAfterFailedOpen() throws Exception {
+        // an OPEN rejected on the host ephemeral tears down first (§8.1): the next record
+        // sees no session — and must not be served by stale engine state either
+        Card card = Vecs.blankSelf();
+        Session session = Vecs.open(card);
+        byte[] openApdu = org.qntx.card.host.Open.request(Vecs.RND).apdu();
+        openApdu[openApdu.length - 2] ^= 1; // corrupt the ephemeral's Y: an invalid point
+        assertEquals(0x6A80, Vecs.sw(card.transmit(openApdu)));
+        assertEquals(0x6985, Vecs.sw(card.transmit(session.wrap(0x20, 0, 0, new byte[0]))));
+    }
+
+    @Test
+    void teardownReinitsTheRecordEngines() throws Exception {
+        // §16.3: an open session's teardown re-arms the five record engines on the zeroed
+        // keys; a teardown with nothing open (bare SELECT) leaves them alone
+        Card card = Vecs.blankSelf();
+        Session session = Vecs.open(card);
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x20, 0, 0, new byte[0]).sw());
+        Fault.countCalls();
+        try {
+            card.transmit(Spec.SELECT);
+            assertEquals(1, Fault.calls("Session.initEngines"), "open-session teardown");
+            card.transmit(Spec.SELECT);
+            assertEquals(1, Fault.calls("Session.initEngines"), "closed-session teardown");
+            Vecs.open(card);
+            assertEquals(2, Fault.calls("Session.initEngines"), "OPEN itself");
+        } finally {
+            Fault.reset();
         }
     }
 }

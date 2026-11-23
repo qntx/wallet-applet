@@ -49,21 +49,21 @@ final class Bytes {
     /**
      * Removes M2 padding (§1 {@code unM2}); returns the unpadded length or -1 when the input is
      * empty, not a multiple of 16, its last non-zero byte is not 0x80, or more than 15 zero bytes
-     * follow it. Fixed bound: one full scan finds the last non-zero byte.
+     * follow it. Fixed bound: the marker must sit in the last block, so only the last 16 bytes are
+     * scanned — the record layer calls this after the MAC check (§8.3 step 4), when the padding
+     * position is no longer secret.
      */
     static short unpad(byte[] buf, short off, short len) {
         if (len <= 0 || (short) (len & 0x0F) != 0) {
             return -1;
         }
         short marker = -1;
-        for (short i = 0; i < len; i++) {
+        for (short i = (short) (len - 16); i < len; i++) {
             if (buf[(short) (off + i)] != 0) {
                 marker = i;
             }
         }
-        if (marker < 0
-                || buf[(short) (off + marker)] != (byte) 0x80
-                || (short) (len - marker) > 16) {
+        if (marker < 0 || buf[(short) (off + marker)] != (byte) 0x80) {
             return -1;
         }
         return marker;

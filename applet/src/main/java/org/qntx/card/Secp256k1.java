@@ -92,6 +92,15 @@ final class Secp256k1 {
                                 KeyBuilder.TYPE_EC_FP_PRIVATE_TRANSIENT_DESELECT,
                                 KeyBuilder.LENGTH_EC_FP_256,
                                 false);
+    }
+
+    /**
+     * Loads the secp256k1 domain into the transient scalar key. A {@code CLEAR_ON_DESELECT} EC
+     * key's domain parameters die with the selection epoch (§8.5), so {@link WalletApplet#select()}
+     * calls this on every selection before any signing path can run; the writes land on the
+     * transient object only, nothing persistent.
+     */
+    void loadEphDomain() {
         setDomain(ephKey);
     }
 

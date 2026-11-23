@@ -65,7 +65,8 @@ java -jar card-sim.jar [--cards N] [--port P] [--state empty|factory|blank]
   `--port 0` gives every card an ephemeral port.
 - `--port P`: first TCP port (default 35963, vpcd's port).
 - `--state empty`: no package and no applets — only the issuer security domain (below).
-- `--state factory`: install the wallet and NDEF applets and stop (life `FACTORY`).
+- `--state factory`: install the wallet and NDEF applets, run the §4.3 initialisation and
+  stop (life `FACTORY`).
 - `--state blank` (default): also personalise each card under the `ca1` test CA of
   `spec/vectors/cert.json` (life `BLANK`).
 
@@ -134,35 +135,88 @@ answer `6982`.
 
 ## Real-card suite
 
-`tests/src/realCard` implements the real-card rows of `docs/architecture.md` §10 — admission 1–9
-(`spec/protocol.md` §3) plus Timing, the `Lc = 248` APDU receive test, Flows, Tearing and the
-sacrificial NVM endurance run. It drives a card through a `Reader` transport: PC/SC
-(`javax.smartcardio`) or the in-process simulator, and talks to a test-only admission CAP
-(`tests/src/admission`, package `F0716E7478FF`, applets `…FF01`/`…FF02`, built by
-`:tests:admissionCap` into `tests/build/cap/admission.cap` — never part of a release artifact) and
-to the product wallet.
+`tests/src/realCard` implements the rows of `docs/architecture.md` §10: the nine silicon
+admission items of `spec/protocol.md` §3 plus install/init, timing, the `Lc = 248` APDU
+receive case, protocol cells, session, wallet lifecycle, signing and memory. It drives a card
+through a PC/SC terminal (`javax.smartcardio`), installs the test-only probe CAP
+(`javacard/probe`, package `F0716E7478FF`, → `tests/build/cap/qntx-probe.cap`) and the
+memprobe CAP (`javacard/memprobe`, the production sources plus `MemProbe` applied by
+`memprobe.patch` at build time → `tests/build/cap/qntx-memprobe.cap`) through the `gp`
+wrapper, and deletes the qntx AIDs afterwards. Neither test CAP is a release artifact; a test
+asserts `qntx-card.cap` contains no `MemProbe`.
 
 ```bash
 ./gradlew :tests:realCard                          # no reader: every test reports "not run"
-./gradlew :tests:realCard -PrealCard="ACS ACR"     # PC/SC terminal (name or substring)
-./gradlew :tests:realCard -PrealCard=sim           # simulator self-check, not hardware evidence
+./gradlew :tests:realCard -PrealCardList           # enumerate the suite as skipped
+./gradlew :tests:realCard -PrealCard="ACS ACR"     # PC/SC terminal name
 ```
 
-The suite never runs in CI and is not attached to `check` (`check` still builds the admission CAP
-and the suite classes). Properties: `-PrealCard=<reader>` (required, or `sim`),
-`-PrealCardPeer=<reader>` (second card for EXPORT/IMPORT timing), `-PrealCardContactless=true`
-(WAIT timing when the transport cannot say it is contactless), `-PrealCardTear=<driver>`
-(programmable reader; none is supported yet), `-PrealCardSacrificial=<CPLC IC serial>`
-(destructive NVM row; refuses development card A `D321`/`49917821` unconditionally).
+The suite never runs in CI and is not attached to `check` (`check` still builds both test CAPs
+and the suite classes). Properties: `-PrealCard=<reader>` (required to run),
+`-PrealCard{Cap,MemCap,ProbeCap}=<path>` (prebuilt CAPs; defaults are the in-tree builds,
+sha256 printed), `-Pqntx.gp=<path>` (`gp` wrapper), `-PrealCardOut=<dir>` (evidence,
+default `tests/build/realcard`), `-PrealCardKeep` (keep installed packages),
+`-PrealCardDifferential=<n>` (default 1,000), `-PrealCardSequences=<n>` (admission 6's RNG
+sequences of 10⁶ bits each; default 80 = the SP 800-22 §4.2 decision-rule size, `1` runs the
+single-sequence p-value checks). The
+flow, tearing and NVM-endurance rows report `unavailable` until their hardware requirements
+exist (see §10); the card identity policy of `REALCARD.md` refuses anything that is not a
+development card before the first install.
 
-Every row appends a JSON line (`row`, `name`, `verdict`, `reader`, `cplc`, `detail`) to
-`tests/build/reports/realcard/results.jsonl`, which feeds the batch record of §10. Rows on the
-simulator are labelled `"reader":"sim"`: timing values are meaningless, contactless and RNG
-quality are not modelled, and rows the simulator cannot express (`genKeyPair` inside a
-transaction, contactless WAIT timing) are skipped with a stated reason rather than passed.
+Every run leaves its evidence under `$realCardOut`: `apdu.log`, `gp-*.log`, `cplc.bin` and the
+per-row `*.json`/`*.bin` reports (`init.json`, `install-journal.json`, `commit-capacity.json`,
+`rng.json`, `memory.json`, `timing.json`/`timing.md`, `signatures.json`,
+`primitives.json`/`primitives.md`), which feed the batch
+record of §10.
 
-No hardware has been run in this repository yet: the suite exists, compiles, lists every §10 test
-and has been self-checked on the simulator only.
+Without `-PrealCard` every test still skips as "not run"; the table below is the suite's own
+`timing.md` from the final card-A run (2026-11-23, ACS ACR1552 1S CL Reader PICC, contactless;
+CAP sha256 `a6e9d2f21fc72c2aea1b4e8b5eb714dd692acb3a8ee217bc7ac08ba034417e5f`).
+
+### Timings (measured on J3R180 (card A))
+
+| command | n | min | median | p95 | max | bound ms | ≤bound |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| INIT_STEP | 7 | 29.4 | 59.5 | 147.6 | 147.6 | 500 | yes |
+| GET_IDENTITY | 1 | 29.4 | 29.4 | 29.4 | 29.4 | — | yes |
+| PERSONALIZE | 1 | 609.0 | 609.0 | 609.0 | 609.0 | — | yes |
+| OPEN | 20 | 311.0 | 314.5 | 314.8 | 314.9 | 1500 | yes |
+| VERIFY wrong | 20 | 79.3 | 79.4 | 79.5 | 79.6 | 1500 | yes |
+| VERIFY right | 20 | 214.0 | 214.3 | 214.6 | 216.6 | 1500 | yes |
+| STATUS | 20 | 33.0 | 33.2 | 33.2 | 33.3 | 1500 | yes |
+| PUBLIC_KEY secp depth3 cold | 20 | 236.7 | 237.0 | 237.3 | 237.4 | 1500 | yes |
+| PUBLIC_KEY secp depth3 warm | 20 | 123.9 | 124.4 | 124.5 | 124.5 | 1500 | yes |
+| PUBLIC_KEY secp depth5 cold | 20 | 411.5 | 412.1 | 412.5 | 412.6 | 1500 | yes |
+| PUBLIC_KEY secp depth5 warm | 20 | 125.1 | 125.5 | 125.8 | 125.9 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 cold | 20 | 211.5 | 211.8 | 211.9 | 212.0 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 warm | 20 | 149.9 | 150.2 | 150.4 | 150.4 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 cold | 20 | 253.7 | 253.9 | 254.1 | 254.1 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 warm | 20 | 150.9 | 151.2 | 151.4 | 151.4 | 1500 | yes |
+| SIGN_ECDSA depth5 cold | 20 | 601.8 | 603.7 | 606.4 | 606.7 | 1500 | yes |
+| SIGN_ECDSA depth5 warm | 20 | 314.4 | 315.4 | 318.2 | 320.5 | 1500 | yes |
+| SIGN_BIP340 untweaked cold | 20 | 1008.4 | 1011.4 | 1012.2 | 1012.3 | 1500 | yes |
+| SIGN_BIP340 untweaked warm | 20 | 723.5 | 726.8 | 727.5 | 728.0 | 1500 | yes |
+| SIGN_BIP340 tweak cold | 20 | 1058.0 | 1059.9 | 1060.3 | 1060.7 | 1500 | yes |
+| SIGN_BIP340 tweak warm | 20 | 769.4 | 769.8 | 770.5 | 770.6 | 1500 | yes |
+| SIGN_ED25519 begin cold | 60 | 494.8 | 498.1 | 498.4 | 498.8 | 1500 | yes |
+| SIGN_ED25519 finish cold | 60 | 667.1 | 668.4 | 671.7 | 671.9 | 1500 | yes |
+| SIGN_ED25519 64B total cold | 20 | 1168.5 | 1169.6 | 1169.9 | 1170.0 | — | — |
+| SIGN_ED25519 begin warm | 60 | 411.3 | 415.9 | 416.3 | 416.5 | 1500 | yes |
+| SIGN_ED25519 finish warm | 60 | 666.9 | 668.4 | 669.0 | 669.0 | 1500 | yes |
+| SIGN_ED25519 64B total warm | 20 | 1080.3 | 1084.6 | 1085.0 | 1085.2 | — | — |
+| SIGN_ED25519 update | 880 | 43.4 | 46.1 | 46.3 | 53.2 | 1500 | yes |
+| SIGN_ED25519 1232B total cold | 20 | 1394.4 | 1395.0 | 1395.3 | 1402.2 | — | — |
+| SIGN_ED25519 1232B total warm | 20 | 1312.1 | 1312.8 | 1313.4 | 1313.7 | — | — |
+| SIGN_ED25519 4032B total cold | 20 | 1939.2 | 1942.9 | 1943.7 | 1944.1 | — | — |
+| SIGN_ED25519 4032B total warm | 20 | 1858.5 | 1860.5 | 1861.6 | 1861.6 | — | — |
+| WAIT | 20 | 969.2 | 969.5 | 969.6 | 969.7 | 1500 | yes |
+| CREATE P1=0 | 20 | 206.3 | 206.9 | 207.1 | 209.7 | 1500 | yes |
+| ERASE | 40 | 53.7 | 54.0 | 54.1 | 54.2 | 1500 | yes |
+| CREATE P1=1 | 20 | 201.7 | 202.1 | 202.3 | 202.4 | 1500 | yes |
+| OFFER offer=NONE | 1 | 216.4 | 216.4 | 216.4 | 216.4 | 1500 | yes |
+| OFFER offer=VALID | 20 | 162.3 | 162.8 | 163.0 | 163.1 | 1500 | yes |
+| SELECT | 20 | 27.6 | 27.6 | 27.7 | 58.8 | 1500 | yes |
+| SELECT after reset | 20 | 29.5 | 29.6 | 29.7 | 29.8 | 1500 | yes |
 
 ## Tools (`qntx-card`)
 
@@ -179,10 +233,12 @@ arguments or output: `QNTX_ISD_KEY` (the card's ISD key, hex) for every subcomma
   diff against. An empty card prints exactly `ISD A000000151000000 01`.
 - `install --cap <file> --cap-sha256 <hex> --scp <s> --baseline <file> --ndef <hex>` checks the
   CAP hash before touching the card, loads it and installs both applets (the NDEF message is
-  1–100 bytes, hex), then asserts the registry is baseline + the package and the two
-  applications.
+  1–100 bytes, hex), asserts the registry is baseline + the package and the two
+  applications, then drives the §4.3 initialisation (`SELECT` + `GET_IDENTITY` until not
+  `6283`, bound 16) and prints each step's duration.
 - `personalise --scp <s> --baseline <file> --batch-record <file> --test-ca <file> |
-  --hsm-config <file> --hsm-key <label>` runs §14.3 steps 4–9: CPLC and identity, certificate
+  --hsm-config <file> --hsm-key <label>` runs §14.3 steps 4–10: it accepts an uninitialised
+  card and drives initialisation first, then CPLC and identity, certificate
   issued by the CA (`--test-ca` accepts only the pinned ca1/ca2 test anchors; HSM mode accepts
   only production anchors), the read-back short ID to type, and independent replacement ISD keys.
   Each card appends one JSON line
@@ -207,11 +263,11 @@ qntx-card personalise --sim 127.0.0.1:35963 --scp 03 --baseline baseline.txt \
 
 Measured on this tree (architecture §14.7 R6; the CI build job reports them again):
 
-- **CAP**: `qntx-card.cap` is 129,693 B; the load-file components inside it
-  (`org/qntx/card/javacard/*.cap`) total 26,864 B.
-- **Transient**: the simulator's memory report ends `total 2568 / 3990 (budget 3390)` — 2,568 B
+- **CAP**: `qntx-card.cap` is 132,813 B; the load-file components inside it
+  (`org/qntx/card/javacard/*.cap`) total 27,643 B.
+- **Transient**: the simulator's memory report ends `total 2776 / 3990 (budget 3390)` — 2,776 B
   of the 3,990 B JCAlgTest pool, inside the §5.1 acceptance budget of 3,390 B.
-- **Persistent**: ≈ 6.6 KB of objects and arrays plus the ≈ 24 KB CAP against the 157,524 B
+- **Persistent**: ≈ 7.1 KB of objects and arrays plus the ≈ 28 KB CAP against the 157,524 B
   J3R180 NVM (architecture §5.1). That is the architecture estimate — the simulator accounts
   transient bytes only, so it is not re-measured here.
 - **Card time** (protocol §16.6, computed from unit costs measured on development card A; full

@@ -1,3 +1,7 @@
+# Before tagging, the real-card gate of docs/architecture.md §10 MUST have passed on
+# this commit: install the production CAP on card A, then OPEN across three select
+# epochs and a power cycle (InstallRealCardTest). CI cannot run it; record the result
+# in the release notes.
 name: Release
 
 on:

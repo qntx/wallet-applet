@@ -6,10 +6,11 @@ import javacard.framework.ISOException;
 import javacard.framework.Util;
 
 /**
- * The one persistent {@code byte[272]} holding every non-key field of protocol.md §4.2
+ * The one persistent {@code byte[274]} holding every non-key field of protocol.md §4.2
  * (architecture.md §4 layout), so each named transaction touches a single array plus its key
  * objects. Writes happen only through {@link #write} and {@link #setLife}, only inside the
- * transaction the spec names, and always atomically.
+ * transaction the spec names, and always atomically. The constructor writes nothing (§4.3): the
+ * zero-filled fresh array reads {@code init = 0}, the first initialisation step.
  */
 final class State {
     static final short OFF_LIFE = 0;
@@ -22,16 +23,9 @@ final class State {
     static final short OFF_CT = 95;
     static final short OFF_TAG = 159;
     static final short OFF_CERT = 175;
+    static final short OFF_INIT = 272;
 
     private final byte[] state = new byte[Const.STATE_LEN];
-
-    State() {
-        // §16.2 item 2: fails <- 0 writes the value and its complement
-        Util.setShort(state, OFF_FAILS, (short) 0);
-        Util.setShort(state, (short) (OFF_FAILS + 2), (short) -1);
-        Util.setShort(state, OFF_OFFER, Const.OFFER_NONE);
-        Util.setShort(state, OFF_LIFE, Const.LIFE_FACTORY);
-    }
 
     /** The coded life value; a non-member read is a detected fault (§16.2 item 1). */
     short life() {
@@ -130,6 +124,20 @@ final class State {
     /** Atomic write of a coded life value; only inside the transaction that owns it. */
     void setLife(short life) {
         Util.setShort(state, OFF_LIFE, life);
+    }
+
+    /**
+     * The install-progress field of §4.3: the next initialisation step index {@code 0 … INIT_STEPS
+     * − 1}, or {@code INIT_DONE} once every step ran. Membership is decided by the dispatch gate,
+     * which reads it twice like {@link #life}.
+     */
+    short init() {
+        return Util.getShort(state, OFF_INIT);
+    }
+
+    /** One atomic {@code init} write: the next step index, or {@code INIT_DONE} after the last. */
+    void setInit(short v) {
+        Util.setShort(state, OFF_INIT, v);
     }
 
     /** Atomic copy into the array; only inside the transaction that owns the field. */

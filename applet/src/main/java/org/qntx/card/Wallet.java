@@ -81,9 +81,19 @@ final class Wallet {
         this.linkPrivate = linkPrivate;
         wrapKey =
                 (AESKey) KeyBuilder.buildKey(KeyBuilder.TYPE_AES, KeyBuilder.LENGTH_AES_128, false);
+    }
+
+    /**
+     * Initialisation step 6 (§4.3): a fresh random {@code wrapKey} and the coded FACTORY state —
+     * {@code fails ← 0} (value and complement), {@code offer ← NONE}, {@code life ← FACTORY};
+     * {@code init ← INIT_DONE} is written by the dispatch, last.
+     */
+    void initState() {
         mem.random.nextBytes(mem.W, (short) 0, Const.AES_KEY_LEN);
         wrapKey.setKey(mem.W, (short) 0);
-        Bytes.wipe(mem.W, (short) 0, Const.AES_KEY_LEN);
+        state.writeFails((short) 0);
+        state.setCoded(State.OFF_OFFER, Const.OFFER_NONE);
+        state.setLife(Const.LIFE_FACTORY);
     }
 
     /**
@@ -236,7 +246,7 @@ final class Wallet {
         }
         // step 3: evaluated once — a skip buys one unwaited attempt, never more (§16.2 item 4)
         if (fa >= Const.FREE_ATTEMPTS && session.waited() < Const.WAIT_UNITS) {
-            ISOException.throwIt(ISO7816.SW_CONDITIONS_NOT_SATISFIED);
+            ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
         // step 4
         session.clearWaited();

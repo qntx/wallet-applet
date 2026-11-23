@@ -61,6 +61,12 @@ public class ECPrivateKeyImpl extends ECKeyImpl implements ECPrivateKey {
 
     public void setS(byte[] buffer, short offset, short length) throws CryptoException {
         checkKeyData(buffer, offset, length);
+        // a transient EC key whose domain died with its selection epoch refuses setS the way
+        // card A does — CryptoException.ILLEGAL_VALUE (patch 13, audit-impl
+        // probe-transient-reselect); a fresh key still carries its default domain
+        if (!isDomainParametersInitialized()) {
+            CryptoException.throwIt(CryptoException.ILLEGAL_VALUE);
+        }
         // persistent key-object write: charge, count, journal (patches 2 and 5)
         Nvm.keyWrite(this, CardRuntime.SET_KEY_CHARGE);
         s.setBytes(buffer, offset, length);

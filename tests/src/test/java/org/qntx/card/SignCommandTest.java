@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.qntx.card.host.Crypto;
@@ -106,7 +107,7 @@ final class SignCommandTest {
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
         assertEquals(1, card.commits().size(), "begin commits T-EDCTR once");
         assertEquals(0x9000, inner(0x33, 1, new byte[] {9, 9}).sw());
-        assertEquals(0x9000, inner(0x33, 2, new byte[0]).sw());
+        assertEquals(0x9000, inner(0x33, 2, new byte[] {9}).sw());
         assertEquals(0, card.writes(), "update and finish write nothing persistent");
     }
 
@@ -205,9 +206,9 @@ final class SignCommandTest {
         // the update continues only the new stream: finish signs just the new message
         byte[] encodedA = Wei25519Map.encode(Vecs.pkEdSolana());
         byte[] stream = Ed25519.stream(Wei25519Map.encode(second.data()), encodedA, new byte[] {7});
-        Response fin2 = inner(0x33, 1, stream);
+        Response fin2 = inner(0x33, 1, Arrays.copyOfRange(stream, 0, stream.length - 1));
         assertEquals(0x9000, fin2.sw());
-        Response fin3 = inner(0x33, 2, new byte[0]);
+        Response fin3 = inner(0x33, 2, new byte[] {stream[stream.length - 1]});
         assertEquals(0x9000, fin3.sw());
         byte[] sig = Ed25519.signature(Wei25519Map.encode(second.data()), fin3.data());
         assertTrue(Ed25519.verify(encodedA, new byte[] {7}, sig), "only the new stream signed");
@@ -217,8 +218,8 @@ final class SignCommandTest {
     void finishEndsTheStream() throws Exception {
         verified();
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
-        assertEquals(0x9000, inner(0x33, 2, new byte[0]).sw());
-        assertEquals(0x6985, inner(0x33, 2, new byte[0]).sw(), "a second finish is 6985");
+        assertEquals(0x9000, inner(0x33, 2, new byte[] {9}).sw());
+        assertEquals(0x6985, inner(0x33, 2, new byte[] {9}).sw(), "a second finish is 6985");
         assertArrayEquals(new byte[194], Internals.edStreamBytes(applet()));
     }
 
@@ -330,17 +331,22 @@ final class SignCommandTest {
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
         assertEquals(0x9000, inner(0x33, 1, new byte[] {1}).sw());
         Fault.arm("Bytes.equal", 3, Const.CHECK_FAIL);
-        assertEquals(0x6F00, inner(0x33, 2, new byte[0]).sw());
+        assertEquals(0x6F00, inner(0x33, 2, new byte[] {9}).sw());
     }
 
     @Test
     void streamChunkLengthBounds() throws Exception {
-        // §9.11: update carries 1..236 bytes, finish 0..236 — the bounds are checkLength's,
+        // §9.11: update and finish carry 1..236 bytes — the bounds are checkLength's,
         // so the wrong lengths never reach the stream
         verified();
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
         assertEquals(0x6700, inner(0x33, 1, new byte[0]).sw(), "empty update");
         // the failed row ended the stream; begin again for the finish bounds
+        assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
+        assertEquals(0x6700, inner(0x33, 2, new byte[0]).sw(), "empty finish");
+        // §9.2 pending states: the failed finish ended the stream as well
+        assertEquals(0x6985, inner(0x33, 1, new byte[] {1}).sw(), "the failed finish ended it");
+        assertEquals(0x6700, inner(0x33, 2, new byte[0]).sw(), "empty finish without a stream");
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
         assertEquals(0x9000, inner(0x33, 2, new byte[236]).sw(), "a 236-byte tail signs");
     }

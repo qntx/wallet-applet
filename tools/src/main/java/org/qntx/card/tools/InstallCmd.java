@@ -99,11 +99,8 @@ final class InstallCmd implements Callable<Integer> {
         var baselineLines = RegistryText.read(baseline);
 
         try (Transport t = transport) {
-            var session =
-                    Gp.open(
-                            transport.open(),
-                            Gp.isdKeys(ctx.env().apply(Gp.ISD_KEY_ENV)),
-                            Gp.scp(scp));
+            var bibo = transport.open();
+            var session = Gp.open(bibo, Gp.isdKeys(ctx.env().apply(Gp.ISD_KEY_ENV)), Gp.scp(scp));
             // §14.3 step 6: the registry must equal the admission baseline before the load
             if (!RegistryText.lines(session.getRegistry()).equals(baselineLines)) {
                 return ctx.fail("install: registry does not equal the baseline");
@@ -127,6 +124,13 @@ final class InstallCmd implements Callable<Integer> {
             if (!RegistryText.lines(session.getRegistry())
                     .equals(RegistryText.plusCap(baselineLines))) {
                 return ctx.fail("install: registry after install is not the baseline plus the CAP");
+            }
+            // §14.3 step 4: drive the bounded initialisation of §4.3 — plaintext SELECT +
+            // GET_IDENTITY after the registry check (SELECT ends the secure channel anyway)
+            try {
+                Init.drive(bibo, ctx.out());
+            } catch (Exception e) {
+                return ctx.fail("install: initialisation failed: " + RegistryCmd.message(e));
             }
             ctx.out().println("installed " + capFile.getPackageAID());
             return 0;
