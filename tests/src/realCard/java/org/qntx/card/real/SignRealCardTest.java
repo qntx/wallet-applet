@@ -32,7 +32,8 @@ import org.qntx.card.tests.Vecs;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 final class SignRealCardTest {
     private Session session;
-    private final Set<String> rPoints = new HashSet<>();
+    // JUnit makes a fresh class instance per test — the R-point ledger must be static
+    private static final Set<String> rPoints = new HashSet<>();
 
     private void verified() throws Exception {
         Fixture.ensureLoaded();
@@ -232,6 +233,7 @@ final class SignRealCardTest {
         Fixture.require();
         // every begin the run produced must carry a different R (§12.3 hedged nonce)
         assertTrue(rPoints.size() >= 6, "collected " + rPoints.size() + " R points");
+        rPoints.clear();
     }
 
     /** begin ‖ 236-byte updates ‖ finish, then RFC 8032 verification of the joined signature. */

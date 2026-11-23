@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import org.junit.jupiter.api.Assumptions;
 import org.qntx.card.host.Certificates;
@@ -43,6 +44,11 @@ public final class Fixture {
     private static Life life;
     private static byte[] cardA;
     private static byte[] cert;
+    // card A clears the CLEAR_ON_DESELECT key domains on every select past the first
+    // (defect D2): the suite therefore talks to the applet inside one selection epoch,
+    // and a select/reset marks it broken so the next state request pays a reinstall
+    private static boolean epochSelected;
+    private static boolean epochBroken;
 
     private Fixture() {}
 
@@ -114,31 +120,31 @@ public final class Fixture {
         if (installed == kind) {
             return;
         }
+        doInstall(kind);
+    }
+
+    private static void doInstall(CapKind kind) throws Exception {
         if (installFailed == kind) {
             throw new IllegalStateException("CAP " + kind + " already failed to install");
         }
         try {
-            doInstall(kind);
+            switch (kind) {
+                case PROD, MEM ->
+                        card.reinstall(
+                                capPath(kind),
+                                RealCard.PACKAGE_AID,
+                                RealCard.PACKAGE_AID,
+                                RealCard.APPLET_AID);
+                case PROBE ->
+                        card.reinstall(
+                                capPath(kind),
+                                RealCard.PROBE_PACKAGE_AID,
+                                RealCard.PROBE_PACKAGE_AID,
+                                RealCard.PROBE_APPLET_AID);
+            }
         } catch (Exception e) {
             installFailed = kind;
             throw e;
-        }
-    }
-
-    private static void doInstall(CapKind kind) throws Exception {
-        switch (kind) {
-            case PROD, MEM ->
-                    card.reinstall(
-                            capPath(kind),
-                            RealCard.PACKAGE_AID,
-                            RealCard.PACKAGE_AID,
-                            RealCard.APPLET_AID);
-            case PROBE ->
-                    card.reinstall(
-                            capPath(kind),
-                            RealCard.PROBE_PACKAGE_AID,
-                            RealCard.PROBE_PACKAGE_AID,
-                            RealCard.PROBE_APPLET_AID);
         }
         installed = kind;
         // a fresh wallet install always starts in FACTORY; the probe has no wallet state
@@ -147,29 +153,82 @@ public final class Fixture {
         // refused with 6A80, so the cached identity must be refetched
         cardA = null;
         cert = null;
+        epochSelected = false;
+        epochBroken = false;
     }
 
-    /** The CAP that should be on the card again before the suite ends (§14.3). */
-    public static void restoreProd() throws Exception {
-        ensureInstalled(CapKind.PROD);
+    /**
+     * The §14.3 end state for teardown: our packages deleted, nothing reinstalled — the production
+     * CAP cannot install on card A anyway (the Critical install finding), so a "restore" would only
+     * re-trigger it.
+     */
+    public static void cleanupCard() throws Exception {
+        if (card == null) {
+            return;
+        }
+        card.deleteOurs();
+        installed = null;
         life = null;
-        card.ok(RealCard.SELECT);
+        cardA = null;
+        cert = null;
+        epochSelected = false;
+        epochBroken = false;
     }
 
-    /** FACTORY: the production CAP installed and selected. */
-    public static void ensureFactory() throws Exception {
+    /**
+     * {@link RealCard} reports every select-by-name it sends: the first wallet select after an
+     * install opens the selection epoch; any further select — a second wallet select or another
+     * applet's — deselects the wallet and breaks it (D2).
+     */
+    static void noteSelect(byte[] apdu) {
+        if (!epochSelected && isWalletSelect(apdu)) {
+            epochSelected = true;
+        } else {
+            epochBroken = true;
+        }
+    }
+
+    /** A power cycle also kills the CLEAR_ON_DESELECT state (and deselects the applet). */
+    static void noteReset() {
+        epochSelected = false;
+        epochBroken = true;
+    }
+
+    private static boolean isWalletSelect(byte[] apdu) {
+        byte[] aid = HexFormat.of().parseHex(RealCard.APPLET_AID);
+        int lc = apdu[4] & 0xFF;
+        return apdu.length >= 5 + lc && Arrays.equals(aid, 0, aid.length, apdu, 5, 5 + lc);
+    }
+
+    /**
+     * The wallet applet selected exactly once since its install. Reinstalls the wallet CAP when the
+     * epoch was broken by a select/reset — the deferred key state can only be rebuilt on a fresh
+     * instance.
+     */
+    private static void ensureEpoch() throws Exception {
         ensureInstalled(CapKind.PROD);
+        if (epochBroken) {
+            doInstall(CapKind.PROD);
+        }
+        if (!epochSelected) {
+            card.ok(RealCard.SELECT);
+        }
+    }
+
+    /** The precondition of a wire check that needs no particular life state. */
+    public static void ensureSelected() throws Exception {
+        ensureEpoch();
+    }
+
+    /** A selected wallet applet in a known life state — FACTORY/BLANK/LOADED all allowed. */
+    public static void ensureFactory() throws Exception {
         if (life != Life.FACTORY && life != Life.BLANK && life != Life.LOADED) {
             // unknown state (e.g. after the probe CAP): a reinstall is the only guaranteed
             // FACTORY and the install budget allows it
-            card.reinstall(
-                    capPath(CapKind.PROD),
-                    RealCard.PACKAGE_AID,
-                    RealCard.PACKAGE_AID,
-                    RealCard.APPLET_AID);
-            life = Life.FACTORY;
+            connect();
+            doInstall(CapKind.PROD);
         }
-        card.ok(RealCard.SELECT);
+        ensureEpoch();
     }
 
     /**
@@ -179,14 +238,9 @@ public final class Fixture {
     public static void ensureStrictFactory() throws Exception {
         if (life != Life.FACTORY) {
             connect();
-            card.reinstall(
-                    capPath(CapKind.PROD),
-                    RealCard.PACKAGE_AID,
-                    RealCard.PACKAGE_AID,
-                    RealCard.APPLET_AID);
-            markInstalled(CapKind.PROD);
+            doInstall(CapKind.PROD);
         }
-        card.ok(RealCard.SELECT);
+        ensureEpoch();
     }
 
     /** A PERSONALIZE payload: {@code cert(97) ‖ caPublic(65)} for the card's own A (§5.2). */
@@ -216,11 +270,21 @@ public final class Fixture {
         return cardA;
     }
 
-    /** BLANK: FACTORY + PERSONALIZE under ca1 (§7). */
+    /** BLANK: FACTORY + PERSONALIZE under ca1 (§7); a LOADED card is ERASEd back (§9.6). */
     public static void ensureBlank() throws Exception {
         ensureFactory();
         if (life == Life.FACTORY) {
             card.ok(personalizeApdu());
+            life = Life.BLANK;
+        }
+        if (life == Life.LOADED) {
+            Session s = open();
+            if (cmd(s, 0x22, 0, 0, Vecs.accessHash()).sw() != 0x9000) {
+                s.close();
+                throw new IllegalStateException("card holds a wallet we cannot erase — stopping");
+            }
+            assertEquals(0x9000, cmd(s, 0x24, 0, 0, new byte[0]).sw(), "ERASE");
+            s.close();
             life = Life.BLANK;
         }
     }
@@ -249,7 +313,7 @@ public final class Fixture {
      * VERIFY + the master public key proves it — instead of spending an ERASE + CREATE.
      */
     public static void ensureLoaded() throws Exception {
-        ensureBlank();
+        ensureEpoch();
         if (life == Life.LOADED) {
             Session s = open();
             if (cmd(s, 0x22, 0, 0, Vecs.accessHash()).sw() == 0x9000) {
@@ -270,6 +334,7 @@ public final class Fixture {
                 throw new IllegalStateException("card holds a wallet we cannot erase — stopping");
             }
         }
+        ensureBlank();
         assertTrue(life == Life.BLANK);
         Session s = open();
         byte[] data = new byte[96];
@@ -286,6 +351,8 @@ public final class Fixture {
         life = kind == CapKind.PROBE ? null : Life.FACTORY;
         cardA = null;
         cert = null;
+        epochSelected = false;
+        epochBroken = false;
     }
 
     /** Records a life-cycle change a test made outside the ensure* helpers. */

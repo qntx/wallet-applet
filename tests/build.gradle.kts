@@ -171,11 +171,9 @@ pitest {
 
 tasks.named("pitest") { dependsOn(":applet:cap", agent) }
 
-// ---------------------------------------------------------------------------
 // Real-card suite (architecture.md §10): the source set compiles in CI, the
 // tests themselves run only with -PrealCard=<reader>; see spec/protocol.md §3
 // for the silicon admission items they measure.
-// ---------------------------------------------------------------------------
 
 val jcKitDir = rootProject.layout.projectDirectory.dir("sdks/${libs.versions.javacard.sdk.get()}")
 val targetSdk =

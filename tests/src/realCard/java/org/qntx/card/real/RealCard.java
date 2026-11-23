@@ -128,6 +128,10 @@ public final class RealCard implements AutoCloseable {
             byte[] rapdu = card.getBasicChannel().transmit(new CommandAPDU(apdu)).getBytes();
             long nanos = System.nanoTime() - t0;
             log(apdu, rapdu);
+            if (apdu.length >= 5 && apdu[0] == 0 && apdu[1] == (byte) 0xA4) {
+                // a select-by-name deselects the wallet; the fixture tracks the D2 epoch
+                Fixture.noteSelect(apdu);
+            }
             return new Timed(rapdu, nanos);
         } catch (javax.smartcardio.CardException e) {
             throw new IllegalStateException("transmit failed: " + e, e);
@@ -161,6 +165,7 @@ public final class RealCard implements AutoCloseable {
     public void reset() throws Exception {
         card.disconnect(true);
         open();
+        Fixture.noteReset();
     }
 
     /** Runs the GP wrapper; output lands in {@code <out>/gp-<seq>-<label>.log}. */
@@ -225,17 +230,12 @@ public final class RealCard implements AutoCloseable {
     }
 
     /**
-     * Deletes both qntx packages that are present, installs {@code cap} and asserts the registry is
-     * the baseline plus exactly {@code extraAids} (architecture.md §14.3 step 6). Deleting both
-     * keeps the check valid when switching between the production/memprobe and probe packages.
+     * Deletes every qntx AID present in {@code before}. Instances go first: a package delete is
+     * refused while an instance is still active (6985). If an instance delete itself is refused as
+     * "still active" — card A keeps the flag once a used applet was never deselected — the package
+     * delete still cascades it, so a failed instance delete is not fatal.
      */
-    public void reinstall(Path cap, String packageAid, String... extraAids) throws Exception {
-        Set<String> before = aidsOf(gp("list", "-l"));
-        baseline();
-        // instances go first: a package delete is refused while an instance is still active
-        // (6985). If an instance delete itself is refused as "still active" — card A keeps the
-        // flag once a used applet was never deselected — the package delete still cascades it,
-        // so a failed instance delete is not fatal here; the registry check below verifies.
+    private void deletePresentAids(Set<String> before) throws Exception {
         for (String aid : List.of(APPLET_AID, PROBE_APPLET_AID, PACKAGE_AID, PROBE_PACKAGE_AID)) {
             if (!before.contains(aid)) {
                 continue;
@@ -254,6 +254,22 @@ public final class RealCard implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /** Deletes every qntx package/instance on the card — the teardown end state (§14.3). */
+    public void deleteOurs() throws Exception {
+        deletePresentAids(aidsOf(gp("list", "-l")));
+    }
+
+    /**
+     * Deletes both qntx packages that are present, installs {@code cap} and asserts the registry is
+     * the baseline plus exactly {@code extraAids} (architecture.md §14.3 step 6). Deleting both
+     * keeps the check valid when switching between the production/memprobe and probe packages.
+     */
+    public void reinstall(Path cap, String packageAid, String... extraAids) throws Exception {
+        Set<String> before = aidsOf(gp("list", "-l"));
+        baseline();
+        deletePresentAids(before);
         gp("install", "--install", cap.toAbsolutePath().toString());
         Set<String> after = aidsOf(gp("list", "-l"));
         Set<String> expected = new TreeSet<>(baselineAids);

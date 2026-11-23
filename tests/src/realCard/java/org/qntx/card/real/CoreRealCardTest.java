@@ -43,17 +43,9 @@ final class CoreRealCardTest {
 
     @Test
     @Order(2)
-    void selectAnswers9000AndNeedsNoData() throws Exception {
-        Fixture.require();
-        RealCard card = Fixture.card();
-        assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT));
-        assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT));
-    }
-
-    @Test
-    @Order(3)
     void classCheckPrecedesInstructionCheck() throws Exception {
         Fixture.require();
+        Fixture.ensureFactory();
         RealCard card = Fixture.card();
         // every class other than 0x80 answers 6E00, even for a known INS; CLAs encoding a
         // logical channel (0x8x with channel bits, e.g. 0x81) never reach the applet — card
@@ -68,9 +60,10 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(4)
+    @Order(3)
     void unknownOuterInsAnswers6D00() throws Exception {
         Fixture.require();
+        Fixture.ensureFactory();
         RealCard card = Fixture.card();
         for (int ins : new int[] {0x00, 0x11, 0x13, 0x7F, 0xA4, 0xE1, 0xE3, 0xFF}) {
             assertEquals(
@@ -81,9 +74,10 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(5)
+    @Order(4)
     void identityIsAStableOnCurveCompressedKey() throws Exception {
         Fixture.require();
+        Fixture.ensureStrictFactory();
         RealCard card = Fixture.card();
         byte[] a = Fixture.cardA();
         assertEquals(33, a.length);
@@ -104,7 +98,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(6)
+    @Order(5)
     void personalizeTransitionsToBlank() throws Exception {
         Fixture.require();
         Fixture.ensureStrictFactory();
@@ -124,7 +118,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(7)
+    @Order(6)
     void rejectedCertificatesKeepTheCardFactory() throws Exception {
         Fixture.require();
         Fixture.ensureStrictFactory();
@@ -170,7 +164,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(9)
+    @Order(7)
     void openIsRefusedInFactoryAndChecksP1P2() throws Exception {
         Fixture.require();
         Fixture.ensureStrictFactory();
@@ -190,7 +184,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(10)
+    @Order(9)
     void openCryptoRejectTearsTheHalfOpenSessionDown() throws Exception {
         Fixture.require();
         Fixture.ensureBlank();
@@ -209,7 +203,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(11)
+    @Order(10)
     void secondOpenReplacesTheSession() throws Exception {
         Fixture.require();
         Fixture.ensureBlank();
@@ -221,7 +215,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(12)
+    @Order(11)
     void invalidRecordsAnswer6982AndKillTheSession() throws Exception {
         Fixture.require();
         Fixture.ensureBlank();
@@ -262,7 +256,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(13)
+    @Order(12)
     void innerErrorsKeepTheSessionAlive() throws Exception {
         Fixture.require();
         Fixture.ensureBlank();
@@ -278,7 +272,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(14)
+    @Order(13)
     void sessionRecordWithoutOpenSessionIs6985() throws Exception {
         Fixture.require();
         Fixture.ensureBlank();
@@ -289,7 +283,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(15)
+    @Order(14)
     void selectTearsAnOpenSessionDown() throws Exception {
         Fixture.require();
         Fixture.ensureBlank();
@@ -304,7 +298,7 @@ final class CoreRealCardTest {
     }
 
     @Test
-    @Order(16)
+    @Order(15)
     void powerCycleKillsTheSession() throws Exception {
         Fixture.require();
         Fixture.ensureBlank();
@@ -315,6 +309,23 @@ final class CoreRealCardTest {
         card.ok(Spec.SELECT);
         assertEquals(0x6985, RealCard.sw(card.transmit(record)), "record after power cycle");
         s.close();
-        assertEquals(0, Fixture.open().counter());
+        // a host must be able to OPEN again after a reselect — on card A the CLEAR_ON_DESELECT
+        // key domains are gone, so OPEN dies inside secp.mul (defect D2, evidence d2/)
+        assertEquals(
+                0x9000,
+                RealCard.sw(card.transmit(Open.request(Vecs.RND).apdu())),
+                "D2: OPEN after reselect");
+    }
+
+    @Test
+    @Order(16)
+    void selectAnswers9000AndNeedsNoData() throws Exception {
+        Fixture.require();
+        Fixture.ensureInstalled(Fixture.CapKind.PROD);
+        RealCard card = Fixture.card();
+        // the epoch-breaking test runs last: a second select is itself D2-triggering but
+        // SELECT must still answer 9000 in any applet state
+        assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT));
+        assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT));
     }
 }

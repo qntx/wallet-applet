@@ -154,9 +154,9 @@ final class TimingRealCardTest {
                 Math.max(0, 32 - tb.length),
                 Math.min(32, tb.length));
         byte[] bip86wire = Vecs.hex(Vecs.secpTemplate("btc-bip86"), "wire");
+        // one selection epoch for the whole table: a further SELECT would clear the
+        // CLEAR_ON_DESELECT key domains (defect D2) and every OPEN after it would 6F00
         for (int i = 0; i < RUNS; i++) {
-            RealCard card = Fixture.card();
-            sample("SELECT", timed(org.qntx.card.tests.Spec.SELECT));
             Open.Request req = Open.request(Vecs.RND);
             RealCard.Timed t = timedFull(req.apdu());
             sample("OPEN", t.nanos());
@@ -304,6 +304,20 @@ final class TimingRealCardTest {
 
     @Test
     @Order(4)
+    void selectTimings() throws Exception {
+        Fixture.require();
+        Fixture.ensureSelected();
+        RealCard card = Fixture.card();
+        // SELECT runs last: every select past the epoch's first is itself D2-triggering
+        for (int i = 0; i < RUNS; i++) {
+            RealCard.Timed t = timedFull(org.qntx.card.tests.Spec.SELECT);
+            assertEquals(0x9000, RealCard.sw(t.rapdu()), "SELECT");
+            sample("SELECT", t.nanos());
+        }
+    }
+
+    @Test
+    @Order(5)
     void writeReportAndAssertBounds() throws Exception {
         Fixture.require();
         StringBuilder md =
@@ -313,6 +327,9 @@ final class TimingRealCardTest {
         Map<String, Object> json = new LinkedHashMap<>();
         boolean waitChecked = false;
         for (Row r : ROWS) {
+            // FIRST_SELECT is report-only: on the lazy test build it pays the deferred
+            // constructor that production pays inside install — not a §16.6 command row
+            boolean bound = !r.name().equals("FIRST_SELECT");
             md.append(
                     String.format(
                             "| %s | %d | %.1f | %.1f | %.1f | %.1f | %s | %s |\n",
@@ -325,7 +342,7 @@ final class TimingRealCardTest {
                             PREDICTED.containsKey(r.name())
                                     ? String.format("%.0f", PREDICTED.get(r.name()))
                                     : "—",
-                            r.max() <= 1500 ? "yes" : "NO"));
+                            bound ? (r.max() <= 1500 ? "yes" : "NO") : "—"));
             Map<String, Object> j = new LinkedHashMap<>();
             j.put("n", r.nanos().size());
             j.put("minMs", r.min());
@@ -340,6 +357,9 @@ final class TimingRealCardTest {
                 com.fasterxml.jackson.jr.ob.JSON.std.asString(json));
         Files.writeString(Fixture.out().resolve("timing.md"), md.toString());
         for (Row r : ROWS) {
+            if (r.name().equals("FIRST_SELECT")) {
+                continue; // report-only row (deferred construction), no §16.6 bound
+            }
             assertTrue(r.max() <= 1500, r.name() + " max " + r.max() + " ms > 1500");
             if (r.name().equals("WAIT")) {
                 waitChecked = true;

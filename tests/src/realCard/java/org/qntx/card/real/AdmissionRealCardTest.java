@@ -510,9 +510,9 @@ final class AdmissionRealCardTest {
     }
 
     @AfterAll
-    static void restoreProductionCap() throws Exception {
+    static void cleanUpCard() throws Exception {
         if (Fixture.available()) {
-            Fixture.restoreProd();
+            Fixture.cleanupCard();
         }
     }
 
