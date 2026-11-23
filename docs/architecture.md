@@ -74,7 +74,7 @@ tests (§14); later stages may extend a class only as their acceptance tables st
 
 ```text
 process(apdu)
-├─ selectingApplet()                → Session.teardown(); 9000                 (select() also tears down)
+├─ selectingApplet()                → Session.teardown(); 9000                 (select() and deselect() also tear down)
 ├─ CLA ≠ 0x80                       → 6E00
 ├─ init ≠ INIT_DONE (coded, read    → INS GET_IDENTITY: run exactly one §4.3 step, then 6283
 │    twice like life)                     while steps remain; every other INS → 6283;
@@ -111,8 +111,11 @@ APDU buffer.
 A transient coded flag that reads `0x0000` is the platform-cleared state — no session, not
 verified, no pending state (a failed `SELECT FILE` also clears `CLEAR_ON_DESELECT` without
 calling `select()`); `0x0000` is the only accepted value outside the code set and selects the
-safe branch rather than `6F00` (audit-impl F-19). The transient EC curve domains die with the
-selection epoch regardless; `select()` re-loads them (§5.5).
+safe branch rather than `6F00` (audit-impl F-19). `deselect()` runs the same §8.5 teardown as
+`select()` — defence in depth, since the NDEF applet shares the wallet's context and selecting
+it does not clear `CLEAR_ON_DESELECT` memory; no property depends on the call being made. The
+transient EC curve domains die with the selection epoch regardless; `select()` re-loads them
+(§5.5).
 
 The constructor writes nothing: it allocates the whole object graph (keys, engines, arrays —
 "no allocation after install" holds) and calls `register`. Every persistent write the old

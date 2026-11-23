@@ -417,8 +417,10 @@ A session is torn down by: `SELECT` of the wallet applet; `OPEN`; a failure in �
 counter exhaustion; any inner `6F00` (after its response record is sent); card reset or loss of
 the field. Teardown wipes, in this order: the `verified` flag, the decrypted seed, the
 derivation caches, the Ed25519 stream, the pending export and import states, the `waited` count,
-the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory, and the applet wipes them explicitly
-in `select()` and in `OPEN` without relying on deselection. The domain parameters of a transient
+the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory. The applet wipes them explicitly in `select()`
+and in `OPEN`, and again in `deselect()` as defence in depth; no property depends on `deselect()`
+being called (a loss of the field calls nothing, and the NDEF applet shares the wallet's context,
+so selecting it does not clear `CLEAR_ON_DESELECT` memory). The domain parameters of a transient
 EC key object are cleared together with its value (on the development card on every deselection,
 including a re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`,
 before any use.
@@ -1072,7 +1074,9 @@ belongs to a past transfer or ciphertext (§3 item 7).
    pending-state
    flags, and the result of every signature, MAC, certificate and fingerprint verification are
    16-bit values from a code set whose members have pairwise Hamming distance ≥ 8 and differ from
-   `0x0000` and `0xFFFF` (`docs/architecture.md` §6). A transient flag that reads `0x0000` is the state
+   `0x0000` and `0xFFFF` (`docs/architecture.md` §6). `init` holds the step indices `0 … N−1`
+   (including `0x0000`) until initialisation completes; only `INIT_DONE` is a code-set member
+   (§4.3). A transient flag that reads `0x0000` is the state
    the platform leaves after clearing transient memory and means no session, not verified, no
    pending state. Any other value returns `6F00` and tears the session down.
 2. `fails` is stored with its bitwise complement in every state, from the constructor on
@@ -1138,7 +1142,7 @@ check points. The identity key is never multiplied by any point. Wallet keys are
 All session state is `CLEAR_ON_DESELECT`. The domain parameters of a transient EC key object are
 cleared together with its value (on the development card on every deselection, including a
 re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`, before any
-use (§8.5). Each initialisation step of §4.3 completes within
+use (§8.5). Each initialisation step of §4.3 MUST complete within
 500 ms; on the baseline chip every command MUST complete within
 1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Card times computed
 from unit costs measured on the development card: `OPEN` 160 ms; `VERIFY` 124 ms; `WAIT` 965 ms;

@@ -74,6 +74,18 @@ final class TeardownTest {
     }
 
     @Test
+    void deselectCallTearsTheSessionDown() throws Exception {
+        // §8.5: deselect() itself runs the teardown — called in-process there is no
+        // platform clearing to mask it
+        Card card = Vecs.blankSelf();
+        Session session = Vecs.loadWallet(card);
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x22, 0, 0, Vecs.accessHash()).sw());
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x33, 0, 0, Vecs.pathEdSolana()).sw());
+        card.applet(Spec.WALLET_AID).deselect();
+        assertDead(card);
+    }
+
+    @Test
     void pendingWordIsClearedByTeardown() throws Exception {
         // every session word holds a nonzero value before the tear, pending included
         Card card = Vecs.blankSelf();

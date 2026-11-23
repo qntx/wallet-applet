@@ -77,6 +77,16 @@ public final class WalletApplet extends Applet {
     }
 
     /**
+     * The §8.5 teardown, run again as defence in depth: the NDEF applet shares this context, so
+     * selecting it does not clear {@code CLEAR_ON_DESELECT} memory. No persistent write — the
+     * teardown touches transient objects only — and nothing relies on the call being made (a loss
+     * of the field calls nothing).
+     */
+    public void deselect() {
+        session.teardown();
+    }
+
+    /**
      * Outer dispatch in the order of protocol.md §9.1. Handlers write their response at buffer
      * offset 0 and return its length; scratch is wiped before every response or error so no command
      * residue leaves the card (§8.1, §16.3 item 3).

@@ -4,6 +4,7 @@ package org.qntx.card.tests;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.ByteArrayOutputStream;
@@ -11,10 +12,13 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import javacard.framework.Applet;
 import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
+import javacard.security.AESKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.qntx.card.Internals;
 import org.qntx.card.NdefApplet;
 import org.qntx.card.WalletApplet;
 import org.qntx.card.host.Session;
@@ -328,6 +332,47 @@ final class NdefTest {
         byte[] record = session.wrap(0x20, 0, 0, new byte[0]);
         byte[] rapdu = card.transmit(record);
         assertEquals(0x6985, Vecs.sw(rapdu), "§13.1: SESSION with no open session");
+    }
+
+    @Test
+    void selectingNdefRunsTheWalletTeardown() throws Exception {
+        // §8.5: the NDEF applet shares the wallet's context, so the platform keeps
+        // CLEAR_ON_DESELECT memory across the switch — the applet's deselect() is what wipes
+        // the session. A verified session with a live Ed25519 stream and a completed WAIT is
+        // torn down while NDEF holds the channel, and the deselect writes nothing persistent.
+        card.install(Spec.WALLET_AID, WalletApplet.class);
+        card.install(Spec.NDEF_AID, NdefApplet.class, MSG1);
+        card.transmit(Spec.SELECT);
+        Vecs.driveInit(card);
+        Vecs.blankFor(card, Vecs.cardA(card));
+        Session session = Vecs.loadWallet(card);
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x22, 0, 0, Vecs.accessHash()).sw());
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x25, 0, 0, new byte[0]).sw());
+        assertEquals(0x9000, Vecs.roundtrip(card, session, 0x33, 0, 0, Vecs.pathEdSolana()).sw());
+        Applet wallet = card.applet(Spec.WALLET_AID);
+        byte[] stream = Internals.edStreamBytes(wallet);
+        assertNotEquals(0, stream[0] | stream[1] | stream[64], "no live stream before SELECT");
+        assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT_NDEF));
+        assertEquals(0, card.writes(), "the deselect teardown writes nothing persistent");
+        assertArrayEquals(new byte[10], Internals.words(wallet), "session words not cleared");
+        byte[] key = new byte[16];
+        for (String name : new String[] {"kce", "kcm", "kre", "krm"}) {
+            Internals.sessionKey(wallet, name).getKey(key, (short) 0);
+            assertArrayEquals(new byte[16], key, name + " not wiped");
+        }
+        assertArrayEquals(new byte[64], Internals.seedBytes(wallet), "seed not wiped");
+        assertArrayEquals(new byte[170], Internals.secpCacheBytes(wallet), "secpCache not wiped");
+        assertArrayEquals(new byte[105], Internals.edCacheBytes(wallet), "edCache not wiped");
+        assertArrayEquals(new byte[194], Internals.edStreamBytes(wallet), "edStream not wiped");
+        ((AESKey) Internals.memField(wallet, "kTe")).getKey(key, (short) 0);
+        assertArrayEquals(new byte[16], key, "kTe not wiped");
+        ((AESKey) Internals.memField(wallet, "kTm")).getKey(key, (short) 0);
+        assertArrayEquals(new byte[16], key, "kTm not wiped");
+        assertArrayEquals(
+                new byte[16], (byte[]) Internals.memField(wallet, "sender"), "sender not wiped");
+        assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT));
+        byte[] record = session.wrap(0x20, 0, 0, new byte[0]);
+        assertEquals(0x6985, Vecs.sw(card.transmit(record)), "the old session is gone");
     }
 
     private static byte[] slice(byte[] file, int off) {
