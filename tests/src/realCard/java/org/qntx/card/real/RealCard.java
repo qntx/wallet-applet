@@ -177,7 +177,16 @@ public final class RealCard implements AutoCloseable {
         Path log = out.resolve(String.format("gp-%02d-%s.log", gpSeq++, label));
         Files.writeString(log, output);
         if (code != 0) {
-            throw new IllegalStateException("gp " + label + " exited " + code + " — see " + log);
+            // surface the card status word so a failure names e.g. the 0x6F00 of a refused
+            // INSTALL without opening the log first
+            java.util.regex.Matcher m =
+                    java.util.regex.Pattern.compile("0x[0-9A-Fa-f]{4}").matcher(output);
+            String sw = "";
+            while (m.find()) {
+                sw = " — last card status " + m.group();
+            }
+            throw new IllegalStateException(
+                    "gp " + label + " exited " + code + sw + " — see " + log);
         }
         return output;
     }
@@ -223,10 +232,26 @@ public final class RealCard implements AutoCloseable {
     public void reinstall(Path cap, String packageAid, String... extraAids) throws Exception {
         Set<String> before = aidsOf(gp("list", "-l"));
         baseline();
-        // instances go first: a package delete is refused while an instance is still active (6985)
+        // instances go first: a package delete is refused while an instance is still active
+        // (6985). If an instance delete itself is refused as "still active" — card A keeps the
+        // flag once a used applet was never deselected — the package delete still cascades it,
+        // so a failed instance delete is not fatal here; the registry check below verifies.
         for (String aid : List.of(APPLET_AID, PROBE_APPLET_AID, PACKAGE_AID, PROBE_PACKAGE_AID)) {
-            if (before.contains(aid)) {
+            if (!before.contains(aid)) {
+                continue;
+            }
+            try {
                 gp("delete", "--delete", aid);
+            } catch (IllegalStateException first) {
+                try {
+                    gp("delete", "--delete", aid, "--force");
+                } catch (IllegalStateException forced) {
+                    // a stuck instance goes away with the cascading package delete below
+                    if (!aid.equals(PACKAGE_AID) && !aid.equals(PROBE_PACKAGE_AID)) {
+                        continue;
+                    }
+                    throw forced;
+                }
             }
         }
         gp("install", "--install", cap.toAbsolutePath().toString());

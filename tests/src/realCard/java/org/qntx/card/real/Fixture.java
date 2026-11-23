@@ -63,11 +63,26 @@ public final class Fixture {
     public static Path capPath(CapKind kind) {
         String prop =
                 switch (kind) {
-                    case PROD -> "qntx.cap";
+                    case PROD -> walletProp();
                     case MEM -> "qntx.memcap";
                     case PROBE -> "qntx.probecap";
                 };
         return Path.of(System.getProperty(prop));
+    }
+
+    /**
+     * {@code -PrealCardWallet=lazy} substitutes the deferred-construction test build for the wallet
+     * CAP the suites exercise; {@code InstallRealCardTest} still uses the real one.
+     */
+    private static String walletProp() {
+        return "lazy".equals(System.getProperty("qntx.wallet", "production"))
+                ? "qntx.lazycap"
+                : "qntx.cap";
+    }
+
+    /** The unmodified production CAP — never affected by {@code -PrealCardWallet}. */
+    public static Path productionCap() {
+        return Path.of(System.getProperty("qntx.cap"));
     }
 
     public static int differential() {

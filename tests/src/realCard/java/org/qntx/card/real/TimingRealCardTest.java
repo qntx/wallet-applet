@@ -122,8 +122,12 @@ final class TimingRealCardTest {
                         RealCard.PACKAGE_AID,
                         RealCard.APPLET_AID);
         Fixture.markInstalled(Fixture.CapKind.PROD);
-        Fixture.card().ok(RealCard.SELECT);
-        RealCard.Timed t = timedFull(Vecs.unhex("80E0000000"));
+        // the first SELECT after install runs the deferred construction on the lazy build —
+        // measure it (n = the installs this suite does anyway, §16.6 table notes n = 1)
+        RealCard.Timed t = timedFull(RealCard.SELECT);
+        assertEquals(0x9000, RealCard.sw(t.rapdu()), "SELECT after install");
+        sample("FIRST_SELECT", t.nanos());
+        t = timedFull(Vecs.unhex("80E0000000"));
         assertEquals(0x9000, RealCard.sw(t.rapdu()), "GET_IDENTITY");
         sample("GET_IDENTITY", t.nanos());
         assertTrue(t.nanos() <= LIMIT_NS, "GET_IDENTITY " + t.nanos());
@@ -330,6 +334,12 @@ final class TimingRealCardTest {
             j.put("maxMs", r.max());
             j.put("predictedMs", PREDICTED.get(r.name()));
             json.put(r.name(), j);
+        }
+        Files.writeString(
+                Fixture.out().resolve("timing.json"),
+                com.fasterxml.jackson.jr.ob.JSON.std.asString(json));
+        Files.writeString(Fixture.out().resolve("timing.md"), md.toString());
+        for (Row r : ROWS) {
             assertTrue(r.max() <= 1500, r.name() + " max " + r.max() + " ms > 1500");
             if (r.name().equals("WAIT")) {
                 waitChecked = true;
@@ -339,9 +349,5 @@ final class TimingRealCardTest {
             }
         }
         assertTrue(waitChecked, "WAIT was not measured");
-        Files.writeString(
-                Fixture.out().resolve("timing.json"),
-                com.fasterxml.jackson.jr.ob.JSON.std.asString(json));
-        Files.writeString(Fixture.out().resolve("timing.md"), md.toString());
     }
 }
