@@ -101,7 +101,13 @@ final class VectorTest {
             Util.arrayCopy(hex(c, "accessHash"), (short) 0, w, (short) 0, (short) 32);
             Util.arrayCopy(hex(c, "wrapKey"), (short) 0, w, (short) 64, (short) 16);
             Util.arrayCopy(hex(c, "seed"), (short) 0, seed, (short) 0, (short) 64);
-            Internals.invoke(Internals.wallet(applet), "wrapNew", new Class<?>[] {byte[].class}, w);
+            Internals.invoke(
+                    Internals.wallet(applet),
+                    "wrap",
+                    new Class<?>[] {byte[].class, byte[].class, short.class},
+                    w,
+                    seed,
+                    (short) 0);
             assertArrayEquals(
                     hex(c, "kEnc"), Arrays.copyOfRange(w, 80, 96), c.get("name") + " kEnc");
             assertArrayEquals(

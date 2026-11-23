@@ -168,6 +168,18 @@ final class ModArith {
 
     private static final byte[] EXP2 = {2};
 
+    /**
+     * {@code (p + 1)/4}, the modular square-root exponent of §10.5 (secp256k1 has {@code p ≡ 3 mod
+     * 4}): a 32-byte exponent for a fourth {@code LENGTH_RSA_512} key on the {@code p} modulus.
+     */
+    private static final byte[] EXP_SQRT = {
+        (byte) 0x3F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
+        (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
+        (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
+        (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
+        (byte) 0xBF, (byte) 0xFF, (byte) 0xFF, (byte) 0x0C,
+    };
+
     /** {@link Mem#W} offsets of {@link #mul}'s temporaries. */
     private static final short T1 = 128;
 
@@ -186,6 +198,7 @@ final class ModArith {
 
     private final Mem mem;
     private final RSAPrivateKey[] rsa;
+    private final RSAPrivateKey rsaSqrt;
     private final Cipher rsaCipher;
 
     ModArith(Mem mem) {
@@ -199,6 +212,12 @@ final class ModArith {
             rsa[m].setModulus(MOD, (short) (m * 64), (short) 64);
             rsa[m].setExponent(EXP2, (short) 0, (short) EXP2.length);
         }
+        rsaSqrt =
+                (RSAPrivateKey)
+                        KeyBuilder.buildKey(
+                                KeyBuilder.TYPE_RSA_PRIVATE, KeyBuilder.LENGTH_RSA_512, false);
+        rsaSqrt.setModulus(MOD, (short) 0, (short) 64);
+        rsaSqrt.setExponent(EXP_SQRT, (short) 0, (short) EXP_SQRT.length);
         rsaCipher = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
     }
 
@@ -208,6 +227,20 @@ final class ModArith {
         Util.arrayFillNonAtomic(w, RSA_IN, (short) 32, (byte) 0);
         Util.arrayCopy(x, xOff, w, RSA_OP, (short) 32);
         rsaCipher.init(rsa[m], Cipher.MODE_DECRYPT);
+        rsaCipher.doFinal(w, RSA_IN, (short) 64, w, RSA_OUT);
+        Util.arrayCopy(w, (short) (RSA_OUT + 32), out, oOff, (short) 32);
+    }
+
+    /**
+     * {@code out = x^((p+1)/4) mod p}, a candidate square root of {@code x} mod the secp256k1 field
+     * prime (§10.5): the caller's contract supplies {@code x < p} already reduced; whether {@code
+     * x} is a quadratic residue is checked by the caller ({@code y² ≡ z}).
+     */
+    void sqrt(byte[] x, short xOff, byte[] out, short oOff) {
+        byte[] w = mem.W;
+        Util.arrayFillNonAtomic(w, RSA_IN, (short) 32, (byte) 0);
+        Util.arrayCopy(x, xOff, w, RSA_OP, (short) 32);
+        rsaCipher.init(rsaSqrt, Cipher.MODE_DECRYPT);
         rsaCipher.doFinal(w, RSA_IN, (short) 64, w, RSA_OUT);
         Util.arrayCopy(w, (short) (RSA_OUT + 32), out, oOff, (short) 32);
     }

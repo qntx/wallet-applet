@@ -6,10 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.lang.reflect.Field;
+import java.util.Arrays;
 import javacard.framework.Applet;
 import javacard.security.AESKey;
 import org.junit.jupiter.api.Test;
 import org.qntx.card.Internals;
+import org.qntx.card.host.Ids;
 import org.qntx.card.host.Session;
 import org.qntx.card.sim.Card;
 
@@ -36,6 +38,13 @@ final class TeardownTest {
         assertArrayEquals(new byte[170], Internals.secpCacheBytes(applet), "secpCache not wiped");
         assertArrayEquals(new byte[194], Internals.edStreamBytes(applet), "edStream not wiped");
         assertArrayEquals(new byte[105], Internals.edCacheBytes(applet), "edCache not wiped");
+        // the pending-transfer state of §9.14 (kTe, kTm, sender) dies with the session too
+        ((AESKey) Internals.memField(applet, "kTe")).getKey(key, (short) 0);
+        assertArrayEquals(new byte[16], key, "kTe not wiped");
+        ((AESKey) Internals.memField(applet, "kTm")).getKey(key, (short) 0);
+        assertArrayEquals(new byte[16], key, "kTm not wiped");
+        assertArrayEquals(
+                new byte[16], (byte[]) Internals.memField(applet, "sender"), "sender not wiped");
         byte[] s = new byte[32];
         Internals.ephKey(applet).getS(s, (short) 0);
         assertArrayEquals(new byte[32], s, "ephemeral scalar not wiped");
@@ -208,6 +217,50 @@ final class TeardownTest {
         state[5] = 0x34;
         assertEquals(0x6F00, Vecs.roundtrip(card, session, 0x20, 0, 0, new byte[0]).sw());
         assertDead(card);
+    }
+
+    @Test
+    void pendingTransferDiesWithTheSession() throws Exception {
+        // arm a genuine pending import so kTe/kTm/sender hold nonzero secret state, then a
+        // SELECT must wipe them (§8.5 endPending runs on every teardown path — the
+        // zero-assertions live in assertDead above)
+        Card source = Vecs.factory();
+        byte[] sa = Vecs.cardA(source);
+        Vecs.blankFor(source, sa);
+        Card target = Vecs.factory();
+        byte[] ta = Vecs.cardA(target);
+        Vecs.blankFor(target, ta);
+        Session sSession = Vecs.open(source);
+        Session tSession = Vecs.open(target);
+        byte[] create = new byte[112];
+        System.arraycopy(Vecs.accessHash(), 0, create, 0, 32);
+        System.arraycopy(Vecs.seed(), 0, create, 32, 64);
+        System.arraycopy(Ids.cardId(ta), 0, create, 96, 16);
+        assertEquals(0x9000, Vecs.roundtrip(source, sSession, 0x21, 1, 0, create).sw(), "CREATE");
+        assertEquals(
+                0x9000, Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).sw(), "OFFER");
+        byte[] offer =
+                Arrays.copyOf(
+                        Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).data(), 129);
+        assertEquals(
+                0x9000,
+                Vecs.roundtrip(source, sSession, 0x22, 0, 0, Vecs.accessHash()).sw(),
+                "VERIFY");
+        byte[] data = new byte[226];
+        System.arraycopy(Vecs.certFor(ta), 0, data, 0, 97);
+        System.arraycopy(offer, 0, data, 97, 129);
+        byte[] head = Vecs.roundtrip(source, sSession, 0x41, 0, 0, data).data();
+        byte[] import0 = new byte[226];
+        System.arraycopy(Vecs.certFor(sa), 0, import0, 0, 97);
+        System.arraycopy(head, 0, import0, 97, 129);
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 0, 0, import0).sw(), "IMPORT0");
+        Applet applet = target.applet(Spec.WALLET_AID);
+        byte[] key = new byte[16];
+        ((AESKey) Internals.memField(applet, "kTe")).getKey(key, (short) 0);
+        assertNotZero(key);
+        assertNotZero((byte[]) Internals.memField(applet, "sender"));
+        target.transmit(Spec.SELECT);
+        assertDead(target);
     }
 
     private static void assertNotZero(byte[] data) {

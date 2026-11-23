@@ -184,6 +184,35 @@ public final class Internals {
         ((javacard.security.ECPublicKey) idKey.getPublic()).setW(w, (short) 0, (short) w.length);
     }
 
+    /** The {@link Transfer} object of the applet (peer slots and the link key pair). */
+    public static Object transfer(Applet applet) {
+        return get(applet, "transfer");
+    }
+
+    /** The 65-byte point stored in peer slot {@code i} (§16.1 item 1). */
+    public static byte[] peerW(Applet applet, int i) {
+        javacard.security.ECPublicKey[] peer =
+                (javacard.security.ECPublicKey[]) get(transfer(applet), "peer");
+        byte[] out = new byte[65];
+        peer[i].getW(out, (short) 0);
+        return out;
+    }
+
+    /** The persistent link private scalar (T-OFFER/T-INSTALL/T-ERASE overwrite it). */
+    public static byte[] linkPrivate(Applet applet) {
+        KeyPair link = (KeyPair) get(transfer(applet), "linkKey");
+        byte[] out = new byte[32];
+        ((javacard.security.ECPrivateKey) link.getPrivate()).getS(out, (short) 0);
+        return out;
+    }
+
+    /** Sets the persistent link key pair to a chosen scalar/point (vector replay). */
+    public static void setLinkKey(Applet applet, byte[] scalar32, byte[] w65) {
+        KeyPair link = (KeyPair) get(transfer(applet), "linkKey");
+        ((javacard.security.ECPrivateKey) link.getPrivate()).setS(scalar32, (short) 0, (short) 32);
+        ((javacard.security.ECPublicKey) link.getPublic()).setW(w65, (short) 0, (short) 65);
+    }
+
     private static Object get(Object o, String field) {
         try {
             Field f = o.getClass().getDeclaredField(field);

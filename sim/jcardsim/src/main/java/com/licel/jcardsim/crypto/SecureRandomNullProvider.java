@@ -26,6 +26,11 @@ class SecureRandomNullProvider extends SecureRandom {
     public SecureRandomNullProvider() {
         super(new SecureRandomSpi() {
             RandomGenerator engine = new DigestRandomGenerator(new SHA1Digest());
+            {
+                // unseeded every card would draw the same stream: identical identities,
+                // identical link keys. Real cards differ, so seed like RandomDataImpl.
+                engine.addSeedMaterial(new SecureRandom().generateSeed(8));
+            }
             @Override
             protected void engineSetSeed(byte[] arg) {
                 engine.addSeedMaterial(arg);

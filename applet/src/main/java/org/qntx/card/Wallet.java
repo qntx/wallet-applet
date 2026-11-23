@@ -7,6 +7,7 @@ import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 import javacard.framework.Util;
 import javacard.security.AESKey;
+import javacard.security.ECPrivateKey;
 import javacard.security.KeyBuilder;
 import javacard.security.Signature;
 import javacardx.crypto.Cipher;
@@ -40,7 +41,7 @@ final class Wallet {
     private static final short P_SFP = 16;
     private static final short P_IDA = 113;
 
-    /** {@link Mem#H} slot of the 49-byte {@code members} staging block of CREATE. */
+    /** {@link Mem#H} slot of the 49-byte {@code members} staging block of CREATE and T-INSTALL. */
     private static final short H_MEMBERS = 0;
 
     private final Mem mem;
@@ -48,6 +49,7 @@ final class Wallet {
     private final Session session;
     private final Identity identity;
     private final Derivation derivation;
+    private final Secp256k1 secp;
 
     /**
      * The persistent AES-128 wrap key of §10.1: overwritten inside T-CREATE, T-CHANGE, T-INSTALL
@@ -55,12 +57,28 @@ final class Wallet {
      */
     private final AESKey wrapKey;
 
-    Wallet(Mem mem, State state, Session session, Identity identity, Derivation derivation) {
+    /**
+     * The private half of the link key pair §4.2 assigns to T-OFFER; T-CREATE, T-INSTALL and
+     * T-ERASE overwrite it with a fresh random scalar so no published {@code LK} keeps a working
+     * private key (§4.2, §16.1). Owned by {@link Transfer}; only the transaction bodies write it.
+     */
+    private final ECPrivateKey linkPrivate;
+
+    Wallet(
+            Mem mem,
+            State state,
+            Session session,
+            Identity identity,
+            Derivation derivation,
+            Secp256k1 secp,
+            ECPrivateKey linkPrivate) {
         this.mem = mem;
         this.state = state;
         this.session = session;
         this.identity = identity;
         this.derivation = derivation;
+        this.secp = secp;
+        this.linkPrivate = linkPrivate;
         wrapKey =
                 (AESKey) KeyBuilder.buildKey(KeyBuilder.TYPE_AES, KeyBuilder.LENGTH_AES_128, false);
         mem.random.nextBytes(mem.W, (short) 0, Const.AES_KEY_LEN);
@@ -169,7 +187,9 @@ final class Wallet {
         // the access hash is staged only now: ModArith owns W[0..96) and W[128..256),
         // so the master check above would have clobbered an earlier copy (§5.1)
         Util.arrayCopy(buf, dataOff, w, W_H, Const.HASH_LEN);
-        wrapNew(w);
+        wrap(w, mem.seed, (short) 0);
+        // W_T is dead past the draw loop: the link-scalar overwrite of §4.3
+        secp.randomScalar(w, W_T);
         // the guarded life check, evaluated twice, immediately before T-CREATE (§16.2 item 4)
         if (state.life() != Const.LIFE_BLANK) {
             ISOException.throwIt(Const.SW_FAULT);
@@ -177,7 +197,7 @@ final class Wallet {
         if (state.life() != Const.LIFE_BLANK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        tCreate(h, origin);
+        tInstall(h, origin);
         session.setVerified();
         return walletInfo(buf);
     }
@@ -262,7 +282,7 @@ final class Wallet {
         byte[] w = mem.W;
         Util.arrayCopy(buf, dataOff, w, W_H, Const.HASH_LEN);
         mem.random.nextBytes(w, W_NEWKEY, Const.AES_KEY_LEN);
-        wrapNew(w);
+        wrap(w, mem.seed, (short) 0);
         // the guarded check, evaluated twice, immediately before T-CHANGE (§16.2 item 4)
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
@@ -310,12 +330,12 @@ final class Wallet {
     }
 
     /**
-     * T-CREATE (§4.3): everything prepared in scratch — the fresh {@code wrapKey} at {@code
-     * W_NEWKEY}, {@code ct}/{@code tag}/{@code fp} at their slots, {@code members} in {@code mem.H}
-     * — is written inside one transaction. The link private key overwrite of §4.3 belongs to {@code
-     * Transfer} (stage {@code sets}).
+     * T-CREATE and T-INSTALL of §4.3 — the same field set with different sources: everything
+     * prepared in scratch (the fresh {@code wrapKey} at {@code W_NEWKEY}, {@code ct}/{@code
+     * tag}/{@code fp} at their slots, {@code members} in {@code mem.H}, the fresh link scalar at
+     * {@code W_T}) is written inside one transaction.
      */
-    private void tCreate(byte[] members, short origin) {
+    private void tInstall(byte[] members, short origin) {
         byte[] w = mem.W;
         JCSystem.beginTransaction();
         wrapKey.setKey(w, W_NEWKEY);
@@ -325,6 +345,7 @@ final class Wallet {
         state.setCoded(State.OFF_ORIGIN, origin);
         state.write(State.OFF_MEMBERS, members, (short) 0, (short) 49);
         state.writeFails((short) 0);
+        linkPrivate.setS(w, W_T, Const.HASH_LEN);
         state.setCoded(State.OFF_OFFER, Const.OFFER_NONE);
         state.setLife(Const.LIFE_LOADED);
         JCSystem.commitTransaction();
@@ -363,12 +384,14 @@ final class Wallet {
     private void tErase() {
         byte[] w = mem.W;
         mem.random.nextBytes(w, W_NEWKEY, Const.AES_KEY_LEN);
+        secp.randomScalar(w, W_T);
         JCSystem.beginTransaction();
         state.setLife(Const.LIFE_BLANK);
         wrapKey.setKey(w, W_NEWKEY);
         state.clear(State.OFF_ORIGIN, (short) 2);
         state.clear(State.OFF_MEMBERS, (short) (State.OFF_TAG + 16 - State.OFF_MEMBERS));
         state.writeFails((short) 0);
+        linkPrivate.setS(w, W_T, Const.HASH_LEN);
         state.setCoded(State.OFF_OFFER, Const.OFFER_NONE);
         JCSystem.commitTransaction();
     }
@@ -440,36 +463,76 @@ final class Wallet {
      */
     private short fingerprint() {
         byte[] w = mem.W;
-        fpHash(w, W_FP);
+        fpHash(mem.seed, (short) 0, w, W_FP);
         state.read(State.OFF_FP, mem.P, P_SFP, Const.HASH_LEN);
         return Bytes.equal(w, W_FP, mem.P, P_SFP, Const.HASH_LEN);
     }
 
-    /** {@code out = SHA-256("qntx-card/v1/fingerprint" ‖ mem.seed)} (§10.1). */
-    private void fpHash(byte[] out, short oOff) {
+    /** {@code out = SHA-256("qntx-card/v1/fingerprint" ‖ seed)} (§10.1). */
+    void fpHash(byte[] seed, short sOff, byte[] out, short oOff) {
         // a command that died between update and doFinal leaves pending bytes
         mem.sha256.reset();
         mem.sha256.update(
                 Const.LABEL_FINGERPRINT, (short) 0, (short) Const.LABEL_FINGERPRINT.length);
-        mem.sha256.doFinal(mem.seed, (short) 0, (short) mem.seed.length, out, oOff);
+        mem.sha256.doFinal(seed, sOff, (short) 64, out, oOff);
     }
 
     /**
-     * The wrap of §10.1 for a NEW {@code wrapKey} (CREATE, CHANGE): the fresh key at {@code
-     * W_NEWKEY} is loaded into {@code mem.kMac} temporarily to run KDF108 (the persistent {@code
-     * wrapKey.setKey} happens only inside the transaction); then {@code kEnc ‖ kMac} derive from
-     * the hash at {@code W_H} and {@code W_CT}, {@code W_TAG}, {@code W_FP} are filled.
+     * The wrap of §10.1 for a NEW {@code wrapKey} (CREATE, CHANGE, T-INSTALL): the fresh key at
+     * {@code W_NEWKEY} is loaded into {@code mem.kMac} temporarily to run KDF108 (the persistent
+     * {@code wrapKey.setKey} happens only inside the transaction); then {@code kEnc ‖ kMac} derive
+     * from the hash at {@code W_H} and {@code W_CT}, {@code W_TAG}, {@code W_FP} are filled from
+     * the seed at {@code seed[sOff]}.
      */
-    private void wrapNew(byte[] w) {
+    private void wrap(byte[] w, byte[] seed, short sOff) {
         mem.kMac.setKey(w, W_NEWKEY);
         Kdf.kdf108(mem, mem.kMac, Const.LABEL_WRAP, w, W_H, Const.HASH_LEN, w, W_KEYS);
         mem.kEnc.setKey(w, W_KEYS);
         mem.kMac.setKey(w, (short) (W_KEYS + 16));
         mem.aesCbc.init(mem.kEnc, Cipher.MODE_ENCRYPT, Const.ZEROS, (short) 0, (short) 16);
-        mem.aesCbc.doFinal(mem.seed, (short) 0, (short) 64, w, W_CT);
+        mem.aesCbc.doFinal(seed, sOff, (short) 64, w, W_CT);
         mem.cmac.init(mem.kMac, Signature.MODE_SIGN);
         mem.cmac.sign(w, W_CT, (short) 64, w, W_TAG);
-        fpHash(w, W_FP);
+        fpHash(seed, sOff, w, W_FP);
+    }
+
+    /**
+     * The install half of IMPORT {@code P1 = 0x01} (§9.14), called by {@link Transfer} after every
+     * payload check passed: the decrypted payload at {@code buf[dataOff]} is {@code origin ‖
+     * seed(64) ‖ accessHash_T(32) ‖ c ‖ IDs}; {@code dataLen} is the payload region to wipe ({@code
+     * ct ‖ tag}). The seed is staged in {@link Mem#seed} for the wrap and the WalletInfo {@code
+     * masterPublicKey}, then wiped; the payload is wiped before the response is written. {@code
+     * verified} is cleared on success (§9.14). Staging the seed early is safe only because every
+     * failure past this point is {@code 6F00}, which tears the session down and wipes {@code
+     * Mem#seed} — every {@code 6A80} check runs before {@code install} is called. {@code life} is
+     * the value {@link Transfer#import1} read at the start of the command; the guarded evaluations
+     * below compare the live state against it, not merely against the BLANK/LOADED set.
+     */
+    short install(byte[] buf, short dataOff, short dataLen, short origin, short c, short life) {
+        byte[] w = mem.W;
+        byte[] h = mem.H;
+        Util.arrayCopy(buf, (short) (dataOff + 1), mem.seed, (short) 0, (short) 64);
+        Util.arrayCopy(buf, (short) (dataOff + 65), w, W_H, Const.HASH_LEN);
+        h[H_MEMBERS] = (byte) c;
+        Util.arrayCopy(buf, (short) (dataOff + 98), h, (short) (H_MEMBERS + 1), (short) (c * 16));
+        for (short i = (short) (H_MEMBERS + 1 + c * 16); i != (short) (H_MEMBERS + 49); i++) {
+            h[i] = 0;
+        }
+        mem.random.nextBytes(w, W_NEWKEY, Const.AES_KEY_LEN);
+        wrap(w, mem.seed, (short) 0);
+        secp.randomScalar(w, W_T);
+        // the guarded life check, evaluated twice, immediately before T-INSTALL (§16.2 item 4)
+        if (state.life() != life || state.life() != life) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        tInstall(h, origin);
+        // every needed byte is out of buf now: the payload goes before the response lands (§9.14)
+        Bytes.wipe(buf, dataOff, dataLen);
+        session.clearVerified();
+        short len = walletInfo(buf);
+        Bytes.wipe(mem.seed, (short) 0, (short) mem.seed.length);
+        derivation.wipeCaches();
+        return len;
     }
 
     /**

@@ -69,9 +69,33 @@ final class Identity {
     /** {@code out = ID(A) = SHA-256(A)[0..16)} (§2), the card's member ID. */
     void id(byte[] out, short off) {
         identity(mem.W, Mem.W_DER);
+        idOf(mem.W, Mem.W_DER, out, off);
+    }
+
+    /**
+     * {@code out = ID(A_peer)} for a 33-byte compressed peer identity key — the member-ID lookup of
+     * EXPORT and IMPORT (§9.13–9.14) without a decompression.
+     */
+    void cardId(byte[] a, short aOff, byte[] out, short oOff) {
+        idOf(a, aOff, out, oOff);
+    }
+
+    /** {@code out = ID(A) = SHA-256(a)[0..16)} for a compressed identity key (§5.1). */
+    private void idOf(byte[] a, short aOff, byte[] out, short oOff) {
         mem.sha256.reset();
-        mem.sha256.doFinal(mem.W, Mem.W_DER, Const.COMPRESSED_LEN, mem.W, W_TH);
-        Util.arrayCopy(mem.W, W_TH, out, off, (short) 16);
+        mem.sha256.doFinal(a, aOff, Const.COMPRESSED_LEN, mem.W, W_TH);
+        Util.arrayCopy(mem.W, W_TH, out, oOff, (short) 16);
+    }
+
+    /**
+     * Coded verification of {@code cert = A(33) ‖ r ‖ s(64)} at {@code cert[cOff]} under the stored
+     * {@code caKey} (§5.2): {@code Verify(caKey, "qntx-card/v1/cert" ‖ A, r ‖ s)}.
+     */
+    short verifyCert(byte[] cert, short cOff) {
+        mem.sha256.reset();
+        mem.sha256.update(Const.LABEL_CERT, (short) 0, (short) Const.LABEL_CERT.length);
+        mem.sha256.doFinal(cert, cOff, Const.COMPRESSED_LEN, mem.W, W_TH);
+        return secp.verifyHash(caKey, mem.W, W_TH, cert, (short) (cOff + Const.COMPRESSED_LEN));
     }
 
     /** GET_IDENTITY (§14.1): {@code life = FACTORY}, {@code P1 = P2 = 0}, no data; response A. */

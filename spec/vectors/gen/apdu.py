@@ -6,12 +6,17 @@
 Transcribes the checks of §8.1 (OPEN), §8.3 (SESSION, outer only — the record-level cases
 live in record.json), §9.2 (checking order and the unknown-INS case), §9.3–9.11 and §9.15
 (STATUS, CREATE, VERIFY, CHANGE, ERASE, PUBLIC_KEY, SIGN_ECDSA, SIGN_BIP340, SIGN_ED25519,
-WAIT) and §14.1–14.2 (GET_IDENTITY, PERSONALIZE). Preconditions that need a prepared failure
+WAIT), §9.12–9.14 (OFFER, EXPORT, IMPORT) and §14.1–14.2 (GET_IDENTITY, PERSONALIZE). Preconditions that need a prepared failure
 count (the WAIT gate of §9.5) are in verify-sequence.json; data checks that no fixed input can
 reach (an invalid BIP-32 master or child, probability about 2^-127) are tested by fault
 injection, and the exhausted Ed25519 counter (edCounter = 0xFFFFFFFF after 2^32 - 1
 signatures) by a prepared persistent state, not listed here. An update chunk of more than 236
 bytes cannot be carried by a command record (§8.3), so its length case is not listed either.
+Transfer data checks that only a forged peer can reach — an offer or export whose identity
+signature is valid over an invalid point (EXPORT LK_T, IMPORT E) and IMPORT P1 = 01 payloads with
+a valid MAC but invalid content — need the peer's private keys and are in transfer.json; the
+OFFER/IMPORT sequences of §18 are in verify-sequence.json. Transfer cases run against a second
+genuine card, {peer}, whose role each life value describes (STATES).
 APDUs are templates with {symbol} placeholders;
 this script computes each Lc byte from the symbol lengths. In every command, case k violates
 check k and every later check that can be violated at the same time, and expects check k's
@@ -51,6 +56,19 @@ SYMBOL_LEN = {
     "message": 32,
     "tweak.bip86": 32,
     "tweak.zeroKey": 32,
+    "peer.cert": 97,
+    "peer.cert.otherCa": 97,
+    "peer.id": 16,
+    "peer.offer": 129,
+    "peer.offer.badSig": 129,
+    "peer.offer.prefix03": 129,
+    "peer.exportHead": 129,
+    "peer.exportHead.badSig": 129,
+    "peer.exportPayload": 160,
+    "peer.exportPayload.badTag": 160,
+    "peer.exportPayload.badCt": 160,
+    "cert.badPoint": 97,
+    "id.badPoint": 16,
 }
 
 SYMBOLS = {
@@ -90,6 +108,22 @@ SYMBOLS = {
     "sig.bip340.untweaked": "response only, 64 bytes: R_x ‖ s, a valid BIP-340 signature of {message} under x(P) where P is the public key of m/86'/0'/0'/0/0 under {seed}; random aux",
     "wei.any": "response only, 64 bytes: X ‖ Y of a point on Wei25519 (§10.4) other than the base point; the nonce is random",
     "ed25519.S.any": "response only, 32 bytes: le32(S) with int_le(S) < l; S depends on the random nonce of the stream's begin",
+    "peer.cert": "97 bytes: the certificate of {peer}, a second card personalized under ca1 (cert = A_peer ‖ Sign(ca1, \"qntx-card/v1/cert\" ‖ A_peer))",
+    "peer.cert.otherCa": "97 bytes: the certificate of {peer}'s identity key A_peer issued under ca2",
+    "peer.id": "16 bytes: ID(A_peer) of {peer}",
+    "peer.offer": "129 bytes: LK ‖ sig, the OFFER response of {peer} (life SOURCE: {peer} is BLANK and answered one OFFER)",
+    "peer.offer.badSig": "129 bytes: {peer.offer} with its last byte xored with 0x01",
+    "peer.offer.prefix03": "129 bytes: {peer.offer} with its first byte changed to 0x03",
+    "peer.exportHead": "129 bytes: E ‖ sig_S, the response of {peer} (the source of life TARGET and TARGET-LOADED, verified) to EXPORT P1 = 00 with {cert} ‖ the OFFER response of the card under test in the case's session",
+    "peer.exportHead.badSig": "129 bytes: {peer.exportHead} with its last byte xored with 0x01",
+    "peer.exportPayload": "160 bytes: ct(144) ‖ tag(16), the response of {peer} to EXPORT P1 = 01 with {accessHash.new}, sent right after the EXPORT P1 = 00 that produced {peer.exportHead}",
+    "peer.exportPayload.badTag": "160 bytes: {peer.exportPayload} with its last byte (in tag) xored with 0x01",
+    "peer.exportPayload.badCt": "160 bytes: {peer.exportPayload} with its first byte (in ct) xored with 0x01",
+    "cert.badPoint": "97 bytes: a certificate under ca1 for A' = 0x02 ‖ u256(5); x = 5 is the smallest positive x for which x^3 + 7 is a quadratic non-residue mod p, so A' does not decompress (§10.5)",
+    "id.badPoint": "16 bytes: ID(A') of the A' of {cert.badPoint}",
+    "offer.any": "response only, 129 bytes: LK ‖ sig where LK is a valid uncompressed secp256k1 point and sig a valid signature under {A} of \"qntx-card/v1/offer\" ‖ LK (§9.12); LK is random",
+    "exportHead.any": "response only, 129 bytes: E ‖ sig_S where E is a valid uncompressed secp256k1 point and sig_S a valid signature under {A} of \"qntx-card/v1/export\" ‖ {A} ‖ A_peer ‖ LK ‖ E, with A_peer from {peer.cert} and LK from {peer.offer} (§9.13); E is random",
+    "exportPayload.any": "response only, 176 bytes: ct(160) ‖ tag(16) that {peer} accepts: IMPORT P1 = 00 with {cert} ‖ the E ‖ sig_S of the session's EXPORT P1 = 00, then IMPORT P1 = 01 with these 176 bytes, both on {peer} in one session, return 9000 and WalletInfo {seed.masterPublicKey} 02 03 {id.self} {peer.id} {id.badPoint}",
 }
 
 # Setup of each life/session combination named by the cases.
@@ -101,6 +135,12 @@ STATES = {
     "session open": "the last OPEN of the setup (OPEN once for BLANK); not verified",
     "session verified": "session open, then VERIFY {accessHash} returned 9000",
     "session streaming": "session verified, then SIGN_ED25519 begin (P1 = 00) with path m/44'/501'/0'/0' returned 9000",
+    "SOURCE": "BLANK, then OPEN and CREATE P1 = 01 with {accessHash} ‖ {seed} ‖ {peer.id} ‖ {id.badPoint} (members = self, peer, badPoint), then a new OPEN. {peer} is a second card personalized under ca1, BLANK, that answered one OFFER ({peer.offer})",
+    "TARGET": "BLANK. {peer} is a second card personalized under ca1 and LOADED by OPEN and CREATE P1 = 01 with {accessHash} ‖ {seed} ‖ {id.self} (members = peer, self); its session stays verified",
+    "TARGET-LOADED": "TARGET, then the card under test receives the wallet: OPEN, OFFER; {peer} EXPORT P1 = 00 with {cert} ‖ that OFFER response and EXPORT P1 = 01 with {accessHash}; the card under test IMPORT P1 = 00 with {peer.cert} ‖ E ‖ sig_S and IMPORT P1 = 01 with ct ‖ tag (LOADED, members = peer, self, f = 0); then a new OPEN on the card under test",
+    "session offered": "session open, then OFFER returned 9000 on the card under test",
+    "session importing": "session offered, then IMPORT P1 = 00 with {peer.cert} ‖ {peer.exportHead} returned 9000",
+    "session exporting": "session verified, then EXPORT P1 = 00 with {peer.cert} ‖ {peer.offer} returned 9000",
 }
 
 
@@ -149,8 +189,9 @@ DEPTH_ELEVEN = "0b" + "80000000" * 11
 ORDER_N = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
 MAX_32 = "ff" * 32
 
-# life values: FACTORY, BLANK, LOADED (§4.1) or "any".
-# session: "none", "open", "verified" or "streaming" (see STATES).
+# life values: FACTORY, BLANK, LOADED (§4.1), "any", or the transfer setups SOURCE, TARGET and
+# TARGET-LOADED (§9.12–9.14, see STATES).
+# session: "none", "open", "verified", "streaming", "offered", "importing" or "exporting".
 COMMANDS = [
     {
         "name": "DISPATCH",
@@ -491,6 +532,71 @@ COMMANDS = [
             case("begin-success", "LOADED", "verified", "330000" + PATH_SOLANA, True, "9000", "{wei.any}"),
             case("update-success", "LOADED", "streaming", "330100" + "00112233", True, "9000", ""),
             case("finish-success", "LOADED", "streaming", "330200" + "44556677", True, "9000", "{ed25519.S.any}"),
+        ],
+    },
+    {
+        "name": "OFFER",
+        "section": "9.12",
+        "cases": [
+            # BLANK and LOADED both allow OFFER: no life case is reachable inside a session
+            case("p1p2", "BLANK", "open", "40010000", True, "6a86"),
+            case("length", "BLANK", "open", "40000000", True, "6700"),
+            case("success-blank", "BLANK", "open", "400000", True, "9000", "{offer.any}"),
+            case("success-loaded", "LOADED", "open", "400000", True, "9000", "{offer.any}"),
+        ],
+    },
+    {
+        "name": "EXPORT",
+        "section": "9.13",
+        "cases": [
+            # life first: P1 and length are also wrong here
+            case("life-blank", "BLANK", "open", "41020000", True, "6985"),
+            case("p1", "SOURCE", "verified", "41020000", True, "6a86"),
+            case("p2", "SOURCE", "verified", "410001{peer.cert}{peer.offer}", True, "6a86"),
+            case("length-0", "SOURCE", "verified", "410000{peer.cert}{peer.offer}00", True, "6700"),
+            case("length-1", "SOURCE", "verified", "410100{accessHash.new}00", True, "6700"),
+            case("unverified-0", "SOURCE", "open", "410000{peer.cert}{peer.offer}", True, "6982"),
+            case("unverified-1", "SOURCE", "open", "410100{accessHash.new}", True, "6982"),
+            case("no-pending-export", "SOURCE", "verified", "410100{accessHash.new}", True, "6985"),
+            # data checks 1-5 of §9.13 in order; each case also fails no earlier check
+            case("cert-other-ca", "SOURCE", "verified", "410000{peer.cert.otherCa}{peer.offer}", True, "6a80"),
+            case("cert-own", "SOURCE", "verified", "410000{cert}{peer.offer}", True, "6a80"),
+            case("cert-non-member", "SOURCE", "verified", "410000{cert.otherA}{peer.offer}", True, "6a80"),
+            case("cert-no-decompression", "SOURCE", "verified", "410000{cert.badPoint}{peer.offer}", True, "6a80"),
+            case("offer-prefix03", "SOURCE", "verified", "410000{peer.cert}{peer.offer.prefix03}", True, "6a80"),
+            case("offer-bad-signature", "SOURCE", "verified", "410000{peer.cert}{peer.offer.badSig}", True, "6a80"),
+            case("success-0", "SOURCE", "verified", "410000{peer.cert}{peer.offer}", True, "9000", "{exportHead.any}"),
+            case("success-1", "SOURCE", "exporting", "410100{accessHash.new}", True, "9000", "{exportPayload.any}"),
+        ],
+    },
+    {
+        "name": "IMPORT",
+        "section": "9.14",
+        "cases": [
+            # BLANK and LOADED both allow IMPORT: no life case is reachable inside a session
+            case("p1", "TARGET", "open", "42020000", True, "6a86"),
+            case("p2", "TARGET", "open", "420001" + "00" * 226, True, "6a86"),
+            case("length-0", "TARGET", "offered", "420000" + "00" * 225, True, "6700"),
+            case("length-1-short", "TARGET", "importing", "420100" + "00" * 161, True, "6700"),
+            case("length-1-long", "TARGET", "importing", "420100" + "00" * 177, True, "6700"),
+            case("no-offer-0", "TARGET", "open", "420000" + "00" * 226, True, "6985"),
+            case("no-offer-1", "TARGET", "open", "420100" + "00" * 160, True, "6985"),
+            case("no-pending-import", "TARGET", "offered", "420100" + "00" * 160, True, "6985"),
+            # data checks 1-5 of §9.14 P1 = 00 in order; each case also fails no earlier check
+            case("cert-other-ca", "TARGET", "offered", "420000{peer.cert.otherCa}{peer.exportHead}", True, "6a80"),
+            case("cert-own", "TARGET", "offered", "420000{cert}{peer.exportHead}", True, "6a80"),
+            case("cert-non-member-loaded", "TARGET-LOADED", "offered", "420000{cert.otherA}{peer.exportHead}", True, "6a80"),
+            # BLANK has no membership check: a certified non-sender fails at the signature
+            case("cert-not-sender-blank", "TARGET", "offered", "420000{cert.otherA}{peer.exportHead}", True, "6a80"),
+            case("cert-no-decompression", "TARGET", "offered", "420000{cert.badPoint}{peer.exportHead}", True, "6a80"),
+            case("export-bad-signature", "TARGET", "offered", "420000{peer.cert}{peer.exportHead.badSig}", True, "6a80"),
+            case("success-0", "TARGET", "offered", "420000{peer.cert}{peer.exportHead}", True, "9000", ""),
+            # data check 1 of §9.14 P1 = 01; checks 2-5 need a forged payload (transfer.json)
+            case("bad-tag", "TARGET", "importing", "420100{peer.exportPayload.badTag}", True, "6a80"),
+            case("bad-ct", "TARGET", "importing", "420100{peer.exportPayload.badCt}", True, "6a80"),
+            case("success-1", "TARGET", "importing", "420100{peer.exportPayload}", True, "9000", "{seed.masterPublicKey}0202{peer.id}{id.self}"),
+            case("reseal-success-0", "TARGET-LOADED", "offered", "420000{peer.cert}{peer.exportHead}", True, "9000", ""),
+            case("reseal-success-1", "TARGET-LOADED", "importing", "420100{peer.exportPayload}", True, "9000", "{seed.masterPublicKey}0202{peer.id}{id.self}"),
         ],
     },
 ]

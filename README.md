@@ -14,8 +14,8 @@ the invariants every change keeps.
 ## Status
 
 The repository is being rewritten from zero against `spec/protocol.md`. This revision implements
-identity, personalisation, the secure session, the wallet commands, derivation and the three
-signing commands (§5–§9.11, §9.15, §10.1–10.4, §12); multi-card transfer, NDEF and the tools
+identity, personalisation, the secure session, the wallet commands, derivation, the three
+signing commands and multi-card transfer (§5–§9.15, §10.1–10.5, §11–§12); NDEF and the tools
 follow.
 
 ## Layout

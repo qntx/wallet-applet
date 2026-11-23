@@ -5,15 +5,17 @@ package org.qntx.card.tests;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.qntx.card.host.Ids;
 import org.qntx.card.host.Session;
 import org.qntx.card.sim.Card;
 
 /**
  * §14.2/architecture §5: every wallet transaction must fit the commit buffer with margin. Expected
  * sizes come from architecture §16.1: the CREATE/CHANGE/ERASE transactions rewrite the wrap
- * material plus key objects (1536 B), T-FAIL and T-OK write the failure pair and session bits (1024
+ * material plus key objects (2048 B), T-FAIL and T-OK write the failure pair and session bits (1024
  * B). {@code card.commits()} is reset per command, so it reports the command's transactions.
  */
 final class CommitCapacityTest {
@@ -56,7 +58,7 @@ final class CommitCapacityTest {
         assertEquals(0x9000, Vecs.roundtrip(card, session, 0x21, 1, 0, data).sw());
         List<Integer> commits = card.commits();
         assertEquals(1, commits.size(), "T-CREATE is a single commit");
-        assertEquals(1536, (int) commits.get(0), "T-CREATE commit bytes");
+        assertEquals(2048, (int) commits.get(0), "T-CREATE commit bytes");
         System.out.println("T-CREATE commit bytes: " + commits.get(0));
     }
 
@@ -107,7 +109,79 @@ final class CommitCapacityTest {
         assertEquals(0x9000, Vecs.roundtrip(card, session, 0x24, 0, 0, new byte[0]).sw());
         List<Integer> erase = card.commits();
         assertEquals(1, erase.size(), "T-ERASE is a single commit");
-        assertEquals(1536, (int) erase.get(0), "T-ERASE commit bytes");
+        assertEquals(2048, (int) erase.get(0), "T-ERASE commit bytes");
         System.out.println("T-ERASE commit bytes: " + erase.get(0));
+    }
+
+    /**
+     * The transfer transactions (§9.12–§9.14): T-OFFER regenerates the persistent link pair (2048
+     * B), a repeat OFFER while {@code offer = VALID} commits nothing, and T-INSTALL is a single
+     * 2048 B commit both for a BLANK install and a LOADED re-seal.
+     */
+    @Test
+    void offerAndInstallTransactionsFit() throws Exception {
+        Card source = Vecs.factory();
+        byte[] sa = Vecs.cardA(source);
+        Vecs.blankFor(source, sa);
+        Card target = Vecs.factory();
+        byte[] ta = Vecs.cardA(target);
+        Vecs.blankFor(target, ta);
+        Session sSession = Vecs.open(source);
+        Session tSession = Vecs.open(target);
+
+        assertEquals(
+                0x9000, Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).sw(), "OFFER");
+        List<Integer> offer = target.commits();
+        assertEquals(1, offer.size(), "T-OFFER is a single commit");
+        assertEquals(2048, (int) offer.get(0), "T-OFFER commit bytes");
+        assertTrue(offer.get(0) <= BUFFER, "T-OFFER vs the buffer");
+        System.out.println("T-OFFER commit bytes: " + offer.get(0));
+        byte[] offerData =
+                Arrays.copyOf(
+                        Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).data(), 129);
+        assertEquals(0, target.commits().size(), "repeat OFFER commits nothing");
+
+        byte[] create = new byte[112];
+        System.arraycopy(Vecs.accessHash(), 0, create, 0, 32);
+        System.arraycopy(Vecs.seed(), 0, create, 32, 64);
+        System.arraycopy(Ids.cardId(ta), 0, create, 96, 16);
+        assertEquals(0x9000, Vecs.roundtrip(source, sSession, 0x21, 1, 0, create).sw(), "CREATE");
+        assertEquals(0x9000, Vecs.roundtrip(source, sSession, 0x22, 0, 0, Vecs.accessHash()).sw());
+        byte[] data = new byte[226];
+        System.arraycopy(Vecs.certFor(ta), 0, data, 0, 97);
+        System.arraycopy(offerData, 0, data, 97, 129);
+        byte[] head = Vecs.roundtrip(source, sSession, 0x41, 0, 0, data).data();
+        byte[] payload = Vecs.roundtrip(source, sSession, 0x41, 1, 0, Vecs.accessHashNew()).data();
+        byte[] import0 = new byte[226];
+        System.arraycopy(Vecs.certFor(sa), 0, import0, 0, 97);
+        System.arraycopy(head, 0, import0, 97, 129);
+
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 0, 0, import0).sw(), "IMPORT0");
+        assertEquals(0, target.commits().size(), "IMPORT0 commits nothing");
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 1, 0, payload).sw(), "IMPORT1");
+        List<Integer> install = target.commits();
+        assertEquals(1, install.size(), "T-INSTALL (BLANK) is a single commit");
+        assertEquals(2048, (int) install.get(0), "T-INSTALL (BLANK) commit bytes");
+        assertTrue(install.get(0) <= BUFFER, "T-INSTALL (BLANK) vs the buffer");
+        System.out.println("T-INSTALL (BLANK) commit bytes: " + install.get(0));
+
+        // the LOADED re-seal: fresh offer + export, same single commit
+        offerData =
+                Arrays.copyOf(
+                        Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).data(), 129);
+        assertEquals(2048, (int) target.commits().get(0), "T-OFFER on LOADED");
+        System.arraycopy(offerData, 0, data, 97, 129);
+        sSession = Vecs.open(source);
+        assertEquals(0x9000, Vecs.roundtrip(source, sSession, 0x22, 0, 0, Vecs.accessHash()).sw());
+        head = Vecs.roundtrip(source, sSession, 0x41, 0, 0, data).data();
+        payload = Vecs.roundtrip(source, sSession, 0x41, 1, 0, Vecs.accessHashNew()).data();
+        System.arraycopy(head, 0, import0, 97, 129);
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 0, 0, import0).sw());
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 1, 0, payload).sw());
+        List<Integer> reseal = target.commits();
+        assertEquals(1, reseal.size(), "T-INSTALL (LOADED) is a single commit");
+        assertEquals(2048, (int) reseal.get(0), "T-INSTALL (LOADED) commit bytes");
+        assertTrue(reseal.get(0) <= BUFFER, "T-INSTALL (LOADED) vs the buffer");
+        System.out.println("T-INSTALL (LOADED) commit bytes: " + reseal.get(0));
     }
 }

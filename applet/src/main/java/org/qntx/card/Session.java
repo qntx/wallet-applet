@@ -361,13 +361,18 @@ final class Session {
 
     /**
      * Ends the active pending state (§9.2): wipes the Ed25519 stream {@link Mem#edStream}, resets
-     * the shared SHA-512 engine the stream hashes with, and clears the word. Idempotent — also runs
-     * when the word is already {@code 0x0000}. The digest reset is the only stream-state cleanup:
-     * {@code begin} relies on it rather than resetting again.
+     * the shared SHA-512 engine the stream hashes with, overwrites the pending export/import keys
+     * {@link Mem#kTe}/{@link Mem#kTm} and wipes the pending sender {@link Mem#sender} (§8.5, every
+     * run — the keys hold a completed or aborted transfer's shared secret), and clears the word.
+     * Idempotent — also runs when the word is already {@code 0x0000}. The digest reset is the only
+     * stream-state cleanup: {@code begin} relies on it rather than resetting again.
      */
     private void endPending() {
         Bytes.wipe(mem.edStream, (short) 0, (short) mem.edStream.length);
         mem.resetSha512();
+        mem.kTe.setKey(Const.ZEROS, (short) 0);
+        mem.kTm.setKey(Const.ZEROS, (short) 0);
+        Bytes.wipe(mem.sender, (short) 0, (short) mem.sender.length);
         setWord(O_PENDING, (short) 0);
     }
 

@@ -3,9 +3,11 @@
 package org.qntx.card.tests;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.qntx.card.host.Ids;
 import org.qntx.card.host.Session;
 import org.qntx.card.sim.Card;
 
@@ -70,6 +72,100 @@ final class UnverifiedWriteTest {
         assertEquals(0, card.writes(), "CREATE on LOADED writes nothing");
     }
 
+    /**
+     * §16.1 item 7 for the transfer commands on a LOADED card in an unverified session: OFFER
+     * commits T-OFFER once and then writes nothing, IMPORT P1 = 0x00 writes the member's peer slot
+     * once, a non-member head writes nothing, EXPORT is {@code 6982} without a write, and IMPORT P1
+     * = 0x01 writes only inside T-INSTALL.
+     */
+    @Test
+    void transferCommandsOnLoadedUnverified() throws Exception {
+        // source: the wallet's creator; target: a member card loaded via import
+        Card source = Vecs.factory();
+        byte[] sa = Vecs.cardA(source);
+        Vecs.blankFor(source, sa);
+        Card target = Vecs.factory();
+        byte[] ta = Vecs.cardA(target);
+        Vecs.blankFor(target, ta);
+        Session sSession = Vecs.open(source);
+        Session tSession = Vecs.open(target);
+        byte[] create = new byte[112];
+        System.arraycopy(Vecs.accessHash(), 0, create, 0, 32);
+        System.arraycopy(Vecs.seed(), 0, create, 32, 64);
+        System.arraycopy(Ids.cardId(ta), 0, create, 96, 16);
+        assertEquals(0x9000, Vecs.roundtrip(source, sSession, 0x21, 1, 0, create).sw(), "CREATE");
+        assertEquals(
+                0x9000,
+                Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).sw(),
+                "target's first OFFER (BLANK) commits T-OFFER");
+        assertEquals(List.of(2048), target.commits(), "T-OFFER commit bytes");
+        byte[] offer =
+                java.util.Arrays.copyOf(
+                        Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).data(), 129);
+        assertEquals(0, target.writes(), "repeat OFFER writes nothing");
+        assertEquals(
+                0x9000,
+                Vecs.roundtrip(source, sSession, 0x22, 0, 0, Vecs.accessHash()).sw(),
+                "source VERIFY");
+        byte[] data = new byte[226];
+        System.arraycopy(Vecs.certFor(ta), 0, data, 0, 97);
+        System.arraycopy(offer, 0, data, 97, 129);
+        byte[] head = Vecs.roundtrip(source, sSession, 0x41, 0, 0, data).data();
+        byte[] payload = Vecs.roundtrip(source, sSession, 0x41, 1, 0, Vecs.accessHashNew()).data();
+        byte[] import0 = new byte[226];
+        System.arraycopy(Vecs.certFor(sa), 0, import0, 0, 97);
+        System.arraycopy(head, 0, import0, 97, 129);
+        // the first import installs the wallet (BLANK target): one slot write + T-INSTALL
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 0, 0, import0).sw(), "IMPORT0");
+        assertTrue(target.writes() <= 1, "IMPORT0 writes at most the peer slot");
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 1, 0, payload).sw(), "IMPORT1");
+        assertEquals(List.of(2048), target.commits(), "T-INSTALL commit bytes");
+
+        // now LOADED and unverified: OFFER arms a fresh offer
+        assertEquals(
+                0x9000,
+                Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).sw(),
+                "OFFER on LOADED unverified");
+        assertEquals(List.of(2048), target.commits(), "T-OFFER is the only commit");
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).sw());
+        assertEquals(0, target.writes(), "repeat OFFER writes nothing");
+
+        // a fresh export for the new offer: IMPORT0 from a member writes the slot once
+        tSession = Vecs.open(target);
+        offer =
+                java.util.Arrays.copyOf(
+                        Vecs.roundtrip(target, tSession, 0x40, 0, 0, new byte[0]).data(), 129);
+        System.arraycopy(offer, 0, data, 97, 129);
+        sSession = Vecs.open(source);
+        assertEquals(0x9000, Vecs.roundtrip(source, sSession, 0x22, 0, 0, Vecs.accessHash()).sw());
+        head = Vecs.roundtrip(source, sSession, 0x41, 0, 0, data).data();
+        payload = Vecs.roundtrip(source, sSession, 0x41, 1, 0, Vecs.accessHashNew()).data();
+        System.arraycopy(head, 0, import0, 97, 129);
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 0, 0, import0).sw());
+        assertTrue(target.writes() <= 1, "member IMPORT0 writes at most the peer slot");
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 0, 0, import0).sw());
+        assertEquals(0, target.writes(), "the same member's slot is not rewritten");
+
+        // a non-member's head is refused with no write
+        Card stranger = Vecs.factory();
+        byte[] stra = Vecs.cardA(stranger);
+        Vecs.blankFor(stranger, stra);
+        byte[] badImport = new byte[226];
+        System.arraycopy(Vecs.certFor(stra), 0, badImport, 0, 97);
+        System.arraycopy(head, 0, badImport, 97, 129);
+        assertEquals(0x6A80, Vecs.roundtrip(target, tSession, 0x42, 0, 0, badImport).sw());
+        assertEquals(0, target.writes(), "non-member IMPORT0 writes nothing");
+
+        // EXPORT is a verified-only command: 6982 and no write
+        assertEquals(0x6982, Vecs.roundtrip(target, tSession, 0x41, 0, 0, data).sw());
+        assertEquals(0, target.writes(), "EXPORT unverified writes nothing");
+
+        // and the genuine payload installs inside T-INSTALL alone
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 0, 0, import0).sw());
+        assertEquals(0x9000, Vecs.roundtrip(target, tSession, 0x42, 1, 0, payload).sw());
+        assertEquals(List.of(2048), target.commits(), "T-INSTALL is the only commit");
+    }
+
     @Test
     void onlyTFailAndOneTEraseAcrossTheLimit() throws Exception {
         loaded();
@@ -86,7 +182,7 @@ final class UnverifiedWriteTest {
             for (int c : card.commits()) {
                 if (c == 1024) {
                     tFail++;
-                } else if (c == 1536) {
+                } else if (c == 2048) {
                     tErase++;
                 }
             }

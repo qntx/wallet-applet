@@ -188,6 +188,61 @@ final class Secp256k1 {
         }
     }
 
+    /**
+     * SEC 1 §2.3.4 decompression of {@code 02 ‖ x} / {@code 03 ‖ x} into the 65-byte uncompressed
+     * {@code out} (§10.5): {@code x < p}, {@code y = (x³ + 7)^((p+1)/4)} with the {@code y² ≡ z}
+     * residue check and the prefix parity fix. The residue check makes the result a validated curve
+     * point; a non-residue {@code x} is {@code CHECK_FAIL}.
+     */
+    short decompress(byte[] in, short iOff, byte[] out, short oOff) {
+        byte prefix = in[iOff];
+        if (prefix != 0x02 && prefix != 0x03) {
+            return Const.CHECK_FAIL;
+        }
+        if (compare(in, (short) (iOff + 1), P, (short) 0) >= 0) {
+            return Const.CHECK_FAIL;
+        }
+        byte[] p = mem.P;
+        modArith.mul(ModArith.MOD_P, in, (short) (iOff + 1), in, (short) (iOff + 1), p, P_X2);
+        modArith.mul(ModArith.MOD_P, p, P_X2, in, (short) (iOff + 1), p, P_RHS);
+        modArith.addMod(ModArith.MOD_P, p, P_RHS, B32, (short) 0, p, P_Y2); // P_Y2 = z
+        modArith.sqrt(p, P_Y2, p, P_X2); // P_X2 = y
+        modArith.square(ModArith.MOD_P, p, P_X2, p, P_RHS);
+        if (Bytes.equal(p, P_RHS, p, P_Y2, (short) 32) != Const.CHECK_OK) {
+            return Const.CHECK_FAIL;
+        }
+        if ((short) (p[(short) (P_X2 + 31)] & 0x01) != (short) (prefix & 0x01)) {
+            modArith.subMod(ModArith.MOD_P, P, (short) 0, p, P_X2, p, P_Y2);
+            Util.arrayCopy(p, P_Y2, p, P_X2, (short) 32);
+        }
+        out[oOff] = 0x04;
+        Util.arrayCopy(in, (short) (iOff + 1), out, (short) (oOff + 1), (short) 32);
+        Util.arrayCopy(p, P_X2, out, (short) (oOff + 33), (short) 32);
+        return Const.CHECK_OK;
+    }
+
+    /**
+     * {@code out = x-coordinate of key·point} (32 bytes), the ECDH shared secret of §9.13–9.14.
+     * PLAIN_XY rejects an invalid {@code point} itself (§16.5); a {@code CryptoException} maps to
+     * {@code CHECK_FAIL}. The key object is the caller's — the link pair's private half or the
+     * transient {@link #ephKey} slot, never copied out.
+     */
+    short agree(ECPrivateKey key, byte[] point, short pOff, byte[] out, short oOff) {
+        try {
+            mem.plainXy.init(key);
+            mem.plainXy.generateSecret(point, pOff, Const.POINT_LEN, mem.P, P_Y2);
+            Util.arrayCopy(mem.P, (short) (P_Y2 + 1), out, oOff, (short) 32);
+            return Const.CHECK_OK;
+        } catch (CryptoException e) {
+            return Const.CHECK_FAIL;
+        }
+    }
+
+    /** The single-use scalar slot, still loaded after {@link #mul} — for {@link #agree}. */
+    ECPrivateKey ephKey() {
+        return ephKey;
+    }
+
     /** SEC 1 §2.3.3 compression of an uncompressed point. */
     void compress(byte[] point, short pOff, byte[] out, short oOff) {
         out[oOff] = (point[(short) (pOff + 64)] & 0x01) == 0 ? (byte) 0x02 : (byte) 0x03;

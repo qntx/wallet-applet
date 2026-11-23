@@ -94,6 +94,7 @@ pitest {
             "org.qntx.card.Bip340",
             "org.qntx.card.Ed25519",
             "org.qntx.card.ModArith",
+            "org.qntx.card.Transfer",
         )
     targetTests = listOf("org.qntx.card.*")
     additionalMutableCodePaths =
@@ -116,6 +117,8 @@ pitest {
                 "-Dqntx.differential=25",
                 "-Dqntx.modarith.rounds=200",
                 "-Dqntx.nonce.count=25",
+                "-Dqntx.fuzz=40",
+                "-Dqntx.decompress.randoms=30",
             )
         }
     excludedTestClasses =
@@ -137,6 +140,18 @@ pitest {
             // txDepth wraps getTransactionDepth solely so the depth gate can be armed;
             // its return mutants coincide with the read-back gate that follows
             "*txDepth",
+            // countRange is the spec check-3 wording of c in {2,3}: the dispatch's
+            // {160,176} IMPORT bound plus |payload| = 98 + 16c already force it, so
+            // every never-branch mutant is equivalent — kept for check-order fidelity
+            "*countRange",
+            // seedOff's only mutant shifts the master's 64-byte window by one; a
+            // shifted window still derives a valid BIP-32 master with overwhelming
+            // probability, so no input distinguishes it
+            "*seedOff",
+            // slotOf runs only after memberSlot has thrown on self == found, so the
+            // equality boundary mutant is unreachable; the direction mutants coincide
+            // with the peer-slot writes asserted by the transfer tests
+            "*slotOf",
         )
     avoidCallsTo =
         listOf(

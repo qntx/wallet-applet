@@ -46,6 +46,7 @@ final class Const {
     /** §9.2: only these (INS, P1) pairs continue a pending state. */
     static final byte INS_SIGN_ED25519 = (byte) 0x33;
 
+    static final byte INS_OFFER = (byte) 0x40;
     static final byte INS_EXPORT = (byte) 0x41;
     static final byte INS_IMPORT = (byte) 0x42;
 
@@ -84,6 +85,28 @@ final class Const {
         (byte) 0x72, (byte) 0x64, (byte) 0x2F, (byte) 0x76, (byte) 0x31, (byte) 0x2F, (byte) 0x66,
         (byte) 0x69, (byte) 0x6E, (byte) 0x67, (byte) 0x65, (byte) 0x72, (byte) 0x70, (byte) 0x72,
         (byte) 0x69, (byte) 0x6E, (byte) 0x74,
+    };
+
+    /** §1: the offer signature label "qntx-card/v1/offer" (§9.12). */
+    static final byte[] LABEL_OFFER = {
+        (byte) 0x71, (byte) 0x6E, (byte) 0x74, (byte) 0x78, (byte) 0x2D, (byte) 0x63, (byte) 0x61,
+        (byte) 0x72, (byte) 0x64, (byte) 0x2F, (byte) 0x76, (byte) 0x31, (byte) 0x2F, (byte) 0x6F,
+        (byte) 0x66, (byte) 0x66, (byte) 0x65, (byte) 0x72,
+    };
+
+    /** §1: the export signature label "qntx-card/v1/export" (§9.13). */
+    static final byte[] LABEL_EXPORT = {
+        (byte) 0x71, (byte) 0x6E, (byte) 0x74, (byte) 0x78, (byte) 0x2D, (byte) 0x63, (byte) 0x61,
+        (byte) 0x72, (byte) 0x64, (byte) 0x2F, (byte) 0x76, (byte) 0x31, (byte) 0x2F, (byte) 0x65,
+        (byte) 0x78, (byte) 0x70, (byte) 0x6F, (byte) 0x72, (byte) 0x74,
+    };
+
+    /** §1: the transfer key-derivation label "qntx-card/v1/kdf-transfer" (§9.13). */
+    static final byte[] LABEL_KDF_TRANSFER = {
+        (byte) 0x71, (byte) 0x6E, (byte) 0x74, (byte) 0x78, (byte) 0x2D, (byte) 0x63, (byte) 0x61,
+        (byte) 0x72, (byte) 0x64, (byte) 0x2F, (byte) 0x76, (byte) 0x31, (byte) 0x2F, (byte) 0x6B,
+        (byte) 0x64, (byte) 0x66, (byte) 0x2D, (byte) 0x74, (byte) 0x72, (byte) 0x61, (byte) 0x6E,
+        (byte) 0x73, (byte) 0x66, (byte) 0x65, (byte) 0x72,
     };
 
     /** §1: the generated-seed label "qntx-card/v1/seed" (§9.4). */
@@ -215,6 +238,9 @@ final class Const {
         INS_SIGN_ECDSA,
         INS_SIGN_BIP340,
         INS_SIGN_ED25519,
+        INS_OFFER,
+        INS_EXPORT,
+        INS_IMPORT,
     };
 
     static final byte[] INNER_LIFE = {
@@ -228,9 +254,12 @@ final class Const {
         (byte) LIFE_BIT_LOADED, // SIGN_ECDSA
         (byte) LIFE_BIT_LOADED, // SIGN_BIP340
         (byte) LIFE_BIT_LOADED, // SIGN_ED25519
+        (byte) (LIFE_BIT_BLANK | LIFE_BIT_LOADED), // OFFER
+        (byte) LIFE_BIT_LOADED, // EXPORT
+        (byte) (LIFE_BIT_BLANK | LIFE_BIT_LOADED), // IMPORT
     };
-    static final byte[] INNER_P1_MAX = {0, 1, 0, 0, 0, 0, 1, 0, 0, 2};
-    static final byte[] INNER_VERIFIED = {0, 0, 0, 1, 1, 0, 1, 1, 1, 1};
+    static final byte[] INNER_P1_MAX = {0, 1, 0, 0, 0, 0, 1, 0, 0, 2, 0, 1, 1};
+    static final byte[] INNER_VERIFIED = {0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0};
 
     /** §7.3: failure limit L, free attempts F, wait units per attempt W. */
     static final short FAIL_LIMIT = 10;

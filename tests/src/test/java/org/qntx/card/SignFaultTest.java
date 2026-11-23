@@ -378,7 +378,7 @@ final class SignFaultTest {
         Fault.countCalls();
         Response r = inner(0x33, 2, new byte[0]);
         assertEquals(0x9000, r.sw());
-        assertEquals(8, Fault.calls("Bytes.wipe"), "3 finish + 1 endPending + 4 scratch");
+        assertEquals(9, Fault.calls("Bytes.wipe"), "3 finish + 2 endPending + 4 scratch");
     }
 
     @Test

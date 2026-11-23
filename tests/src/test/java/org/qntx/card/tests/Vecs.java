@@ -285,6 +285,14 @@ public final class Vecs {
         return unhex("048000002c800001f58000000080000000");
     }
 
+    /** The compressed point {@code 02 ‖ u256(5)}: a valid public key nobody knows a scalar for. */
+    public static byte[] badPointA() {
+        byte[] a = new byte[33];
+        a[0] = 2;
+        a[32] = 5;
+        return a;
+    }
+
     /** A card ID different from {@code ID(a)} ({@code marker} must differ per caller). */
     private static byte[] otherId(byte[] a, int marker) {
         byte[] id = Ids.cardId(a);

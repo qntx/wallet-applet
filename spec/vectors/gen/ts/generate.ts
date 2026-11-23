@@ -16,6 +16,7 @@ import { kdfDoc } from './kdf.ts';
 import { recordDoc } from './record.ts';
 import { selftest } from './selftest.ts';
 import { sessionDoc } from './session.ts';
+import { transferDoc } from './transfer.ts';
 import { wrapDoc } from './wrap.ts';
 
 const FILES: Record<string, () => unknown> = {
@@ -30,6 +31,7 @@ const FILES: Record<string, () => unknown> = {
   'ecdsa.json': ecdsaDoc,
   'bip340.json': bip340Doc,
   'ed25519.json': ed25519Doc,
+  'transfer.json': transferDoc,
 };
 
 const out = process.argv[2];

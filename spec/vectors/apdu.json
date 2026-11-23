@@ -35,7 +35,23 @@
     "sig.bip340.bip86": "response only, 64 bytes: R_x \u2016 s, a valid BIP-340 signature of {message} under the x-only output key x(P_even + int({tweak.bip86})\u00b7G) of m/86'/0'/0'/0/0 under {seed}; random aux",
     "sig.bip340.untweaked": "response only, 64 bytes: R_x \u2016 s, a valid BIP-340 signature of {message} under x(P) where P is the public key of m/86'/0'/0'/0/0 under {seed}; random aux",
     "wei.any": "response only, 64 bytes: X \u2016 Y of a point on Wei25519 (\u00a710.4) other than the base point; the nonce is random",
-    "ed25519.S.any": "response only, 32 bytes: le32(S) with int_le(S) < l; S depends on the random nonce of the stream's begin"
+    "ed25519.S.any": "response only, 32 bytes: le32(S) with int_le(S) < l; S depends on the random nonce of the stream's begin",
+    "peer.cert": "97 bytes: the certificate of {peer}, a second card personalized under ca1 (cert = A_peer \u2016 Sign(ca1, \"qntx-card/v1/cert\" \u2016 A_peer))",
+    "peer.cert.otherCa": "97 bytes: the certificate of {peer}'s identity key A_peer issued under ca2",
+    "peer.id": "16 bytes: ID(A_peer) of {peer}",
+    "peer.offer": "129 bytes: LK \u2016 sig, the OFFER response of {peer} (life SOURCE: {peer} is BLANK and answered one OFFER)",
+    "peer.offer.badSig": "129 bytes: {peer.offer} with its last byte xored with 0x01",
+    "peer.offer.prefix03": "129 bytes: {peer.offer} with its first byte changed to 0x03",
+    "peer.exportHead": "129 bytes: E \u2016 sig_S, the response of {peer} (the source of life TARGET and TARGET-LOADED, verified) to EXPORT P1 = 00 with {cert} \u2016 the OFFER response of the card under test in the case's session",
+    "peer.exportHead.badSig": "129 bytes: {peer.exportHead} with its last byte xored with 0x01",
+    "peer.exportPayload": "160 bytes: ct(144) \u2016 tag(16), the response of {peer} to EXPORT P1 = 01 with {accessHash.new}, sent right after the EXPORT P1 = 00 that produced {peer.exportHead}",
+    "peer.exportPayload.badTag": "160 bytes: {peer.exportPayload} with its last byte (in tag) xored with 0x01",
+    "peer.exportPayload.badCt": "160 bytes: {peer.exportPayload} with its first byte (in ct) xored with 0x01",
+    "cert.badPoint": "97 bytes: a certificate under ca1 for A' = 0x02 \u2016 u256(5); x = 5 is the smallest positive x for which x^3 + 7 is a quadratic non-residue mod p, so A' does not decompress (\u00a710.5)",
+    "id.badPoint": "16 bytes: ID(A') of the A' of {cert.badPoint}",
+    "offer.any": "response only, 129 bytes: LK \u2016 sig where LK is a valid uncompressed secp256k1 point and sig a valid signature under {A} of \"qntx-card/v1/offer\" \u2016 LK (\u00a79.12); LK is random",
+    "exportHead.any": "response only, 129 bytes: E \u2016 sig_S where E is a valid uncompressed secp256k1 point and sig_S a valid signature under {A} of \"qntx-card/v1/export\" \u2016 {A} \u2016 A_peer \u2016 LK \u2016 E, with A_peer from {peer.cert} and LK from {peer.offer} (\u00a79.13); E is random",
+    "exportPayload.any": "response only, 176 bytes: ct(160) \u2016 tag(16) that {peer} accepts: IMPORT P1 = 00 with {cert} \u2016 the E \u2016 sig_S of the session's EXPORT P1 = 00, then IMPORT P1 = 01 with these 176 bytes, both on {peer} in one session, return 9000 and WalletInfo {seed.masterPublicKey} 02 03 {id.self} {peer.id} {id.badPoint}"
   },
   "states": {
     "FACTORY": "a freshly installed card",
@@ -44,7 +60,13 @@
     "session none": "no OPEN after the setup",
     "session open": "the last OPEN of the setup (OPEN once for BLANK); not verified",
     "session verified": "session open, then VERIFY {accessHash} returned 9000",
-    "session streaming": "session verified, then SIGN_ED25519 begin (P1 = 00) with path m/44'/501'/0'/0' returned 9000"
+    "session streaming": "session verified, then SIGN_ED25519 begin (P1 = 00) with path m/44'/501'/0'/0' returned 9000",
+    "SOURCE": "BLANK, then OPEN and CREATE P1 = 01 with {accessHash} \u2016 {seed} \u2016 {peer.id} \u2016 {id.badPoint} (members = self, peer, badPoint), then a new OPEN. {peer} is a second card personalized under ca1, BLANK, that answered one OFFER ({peer.offer})",
+    "TARGET": "BLANK. {peer} is a second card personalized under ca1 and LOADED by OPEN and CREATE P1 = 01 with {accessHash} \u2016 {seed} \u2016 {id.self} (members = peer, self); its session stays verified",
+    "TARGET-LOADED": "TARGET, then the card under test receives the wallet: OPEN, OFFER; {peer} EXPORT P1 = 00 with {cert} \u2016 that OFFER response and EXPORT P1 = 01 with {accessHash}; the card under test IMPORT P1 = 00 with {peer.cert} \u2016 E \u2016 sig_S and IMPORT P1 = 01 with ct \u2016 tag (LOADED, members = peer, self, f = 0); then a new OPEN on the card under test",
+    "session offered": "session open, then OFFER returned 9000 on the card under test",
+    "session importing": "session offered, then IMPORT P1 = 00 with {peer.cert} \u2016 {peer.exportHead} returned 9000",
+    "session exporting": "session verified, then EXPORT P1 = 00 with {peer.cert} \u2016 {peer.offer} returned 9000"
   },
   "commands": [
     {
@@ -1104,6 +1126,352 @@
           "inner": true,
           "sw": "9000",
           "response": "{ed25519.S.any}"
+        }
+      ]
+    },
+    {
+      "name": "OFFER",
+      "section": "9.12",
+      "cases": [
+        {
+          "name": "p1p2",
+          "life": "BLANK",
+          "session": "open",
+          "apdu": "40010000",
+          "inner": true,
+          "sw": "6a86"
+        },
+        {
+          "name": "length",
+          "life": "BLANK",
+          "session": "open",
+          "apdu": "40000000",
+          "inner": true,
+          "sw": "6700"
+        },
+        {
+          "name": "success-blank",
+          "life": "BLANK",
+          "session": "open",
+          "apdu": "400000",
+          "inner": true,
+          "sw": "9000",
+          "response": "{offer.any}"
+        },
+        {
+          "name": "success-loaded",
+          "life": "LOADED",
+          "session": "open",
+          "apdu": "400000",
+          "inner": true,
+          "sw": "9000",
+          "response": "{offer.any}"
+        }
+      ]
+    },
+    {
+      "name": "EXPORT",
+      "section": "9.13",
+      "cases": [
+        {
+          "name": "life-blank",
+          "life": "BLANK",
+          "session": "open",
+          "apdu": "41020000",
+          "inner": true,
+          "sw": "6985"
+        },
+        {
+          "name": "p1",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "41020000",
+          "inner": true,
+          "sw": "6a86"
+        },
+        {
+          "name": "p2",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410001{peer.cert}{peer.offer}",
+          "inner": true,
+          "sw": "6a86"
+        },
+        {
+          "name": "length-0",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{peer.cert}{peer.offer}00",
+          "inner": true,
+          "sw": "6700"
+        },
+        {
+          "name": "length-1",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410100{accessHash.new}00",
+          "inner": true,
+          "sw": "6700"
+        },
+        {
+          "name": "unverified-0",
+          "life": "SOURCE",
+          "session": "open",
+          "apdu": "410000{peer.cert}{peer.offer}",
+          "inner": true,
+          "sw": "6982"
+        },
+        {
+          "name": "unverified-1",
+          "life": "SOURCE",
+          "session": "open",
+          "apdu": "410100{accessHash.new}",
+          "inner": true,
+          "sw": "6982"
+        },
+        {
+          "name": "no-pending-export",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410100{accessHash.new}",
+          "inner": true,
+          "sw": "6985"
+        },
+        {
+          "name": "cert-other-ca",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{peer.cert.otherCa}{peer.offer}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "cert-own",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{cert}{peer.offer}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "cert-non-member",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{cert.otherA}{peer.offer}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "cert-no-decompression",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{cert.badPoint}{peer.offer}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "offer-prefix03",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{peer.cert}{peer.offer.prefix03}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "offer-bad-signature",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{peer.cert}{peer.offer.badSig}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "success-0",
+          "life": "SOURCE",
+          "session": "verified",
+          "apdu": "410000{peer.cert}{peer.offer}",
+          "inner": true,
+          "sw": "9000",
+          "response": "{exportHead.any}"
+        },
+        {
+          "name": "success-1",
+          "life": "SOURCE",
+          "session": "exporting",
+          "apdu": "410100{accessHash.new}",
+          "inner": true,
+          "sw": "9000",
+          "response": "{exportPayload.any}"
+        }
+      ]
+    },
+    {
+      "name": "IMPORT",
+      "section": "9.14",
+      "cases": [
+        {
+          "name": "p1",
+          "life": "TARGET",
+          "session": "open",
+          "apdu": "42020000",
+          "inner": true,
+          "sw": "6a86"
+        },
+        {
+          "name": "p2",
+          "life": "TARGET",
+          "session": "open",
+          "apdu": "42000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "inner": true,
+          "sw": "6a86"
+        },
+        {
+          "name": "length-0",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "420000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "inner": true,
+          "sw": "6700"
+        },
+        {
+          "name": "length-1-short",
+          "life": "TARGET",
+          "session": "importing",
+          "apdu": "4201000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "inner": true,
+          "sw": "6700"
+        },
+        {
+          "name": "length-1-long",
+          "life": "TARGET",
+          "session": "importing",
+          "apdu": "420100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "inner": true,
+          "sw": "6700"
+        },
+        {
+          "name": "no-offer-0",
+          "life": "TARGET",
+          "session": "open",
+          "apdu": "42000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "inner": true,
+          "sw": "6985"
+        },
+        {
+          "name": "no-offer-1",
+          "life": "TARGET",
+          "session": "open",
+          "apdu": "42010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "inner": true,
+          "sw": "6985"
+        },
+        {
+          "name": "no-pending-import",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "42010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "inner": true,
+          "sw": "6985"
+        },
+        {
+          "name": "cert-other-ca",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "420000{peer.cert.otherCa}{peer.exportHead}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "cert-own",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "420000{cert}{peer.exportHead}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "cert-non-member-loaded",
+          "life": "TARGET-LOADED",
+          "session": "offered",
+          "apdu": "420000{cert.otherA}{peer.exportHead}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "cert-not-sender-blank",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "420000{cert.otherA}{peer.exportHead}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "cert-no-decompression",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "420000{cert.badPoint}{peer.exportHead}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "export-bad-signature",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "420000{peer.cert}{peer.exportHead.badSig}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "success-0",
+          "life": "TARGET",
+          "session": "offered",
+          "apdu": "420000{peer.cert}{peer.exportHead}",
+          "inner": true,
+          "sw": "9000",
+          "response": ""
+        },
+        {
+          "name": "bad-tag",
+          "life": "TARGET",
+          "session": "importing",
+          "apdu": "420100{peer.exportPayload.badTag}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "bad-ct",
+          "life": "TARGET",
+          "session": "importing",
+          "apdu": "420100{peer.exportPayload.badCt}",
+          "inner": true,
+          "sw": "6a80"
+        },
+        {
+          "name": "success-1",
+          "life": "TARGET",
+          "session": "importing",
+          "apdu": "420100{peer.exportPayload}",
+          "inner": true,
+          "sw": "9000",
+          "response": "{seed.masterPublicKey}0202{peer.id}{id.self}"
+        },
+        {
+          "name": "reseal-success-0",
+          "life": "TARGET-LOADED",
+          "session": "offered",
+          "apdu": "420000{peer.cert}{peer.exportHead}",
+          "inner": true,
+          "sw": "9000",
+          "response": ""
+        },
+        {
+          "name": "reseal-success-1",
+          "life": "TARGET-LOADED",
+          "session": "importing",
+          "apdu": "420100{peer.exportPayload}",
+          "inner": true,
+          "sw": "9000",
+          "response": "{seed.masterPublicKey}0202{peer.id}{id.self}"
         }
       ]
     }

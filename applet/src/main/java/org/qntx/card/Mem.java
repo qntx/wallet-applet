@@ -71,6 +71,16 @@ final class Mem {
      */
     final byte[] edStream;
 
+    /**
+     * The pending export/import encryption and MAC keys of §9.13–§9.14 and the 16-byte pending
+     * sender card ID (architecture.md §5.1 {@code Transfer} row). Session state like {@link
+     * #edStream}: wiped by {@code Session.endPending} and teardown, never by {@link #wipeScratch}.
+     */
+    final AESKey kTe;
+
+    final AESKey kTm;
+    final byte[] sender;
+
     Mem() {
         aesCbc = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
         cmac = Signature.getInstance(Signature.ALG_AES_CMAC_128, false);
@@ -89,6 +99,9 @@ final class Mem {
         secpCache = JCSystem.makeTransientByteArray((short) 170, JCSystem.CLEAR_ON_DESELECT);
         edCache = JCSystem.makeTransientByteArray((short) 105, JCSystem.CLEAR_ON_DESELECT);
         edStream = JCSystem.makeTransientByteArray((short) 194, JCSystem.CLEAR_ON_DESELECT);
+        kTe = aesKey();
+        kTm = aesKey();
+        sender = JCSystem.makeTransientByteArray((short) 16, JCSystem.CLEAR_ON_DESELECT);
     }
 
     private static AESKey aesKey() {

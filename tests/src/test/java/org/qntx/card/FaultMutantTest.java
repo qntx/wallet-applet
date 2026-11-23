@@ -342,7 +342,7 @@ final class FaultMutantTest {
         Fault.arm("Wallet.fingerprint", 1, Const.CHECK_FAIL);
         assertEquals(0x6F00, verify(Vecs.accessHash()).sw());
         assertEquals(
-                13,
+                14,
                 Fault.calls("Bytes.wipe"),
                 "the fingerprint-fault path wiped seed, caches and scratch");
         assertArrayEquals(new byte[64], Internals.seedBytes(applet()));
@@ -352,7 +352,7 @@ final class FaultMutantTest {
         Fault.arm("Wallet.fingerprint", 2, Const.CHECK_FAIL);
         assertEquals(0x6F00, verify(Vecs.accessHash()).sw());
         assertEquals(
-                13,
+                14,
                 Fault.calls("Bytes.wipe"),
                 "the second fingerprint-fault path wiped seed, caches and scratch");
         assertArrayEquals(new byte[64], Internals.seedBytes(applet()));

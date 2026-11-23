@@ -7,6 +7,8 @@ import javacard.framework.Applet;
 import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
+import javacard.security.ECPrivateKey;
+import javacard.security.KeyPair;
 
 /**
  * The qntx card wallet applet (protocol.md §2, §6, §9.1). Constructs the object graph once — {@code
@@ -23,6 +25,7 @@ public final class WalletApplet extends Applet {
     private final Bip340 bip340;
     private final Ed25519 ed25519;
     private final Wallet wallet;
+    private final Transfer transfer;
 
     private WalletApplet(byte[] bArray, short bOffset) {
         Const.init();
@@ -37,7 +40,19 @@ public final class WalletApplet extends Applet {
         ecdsa = new Ecdsa(mem, session, derivation, secp);
         bip340 = new Bip340(mem, session, derivation, secp, modArith);
         ed25519 = new Ed25519(mem, state, session, derivation, wei, modArith, identity);
-        wallet = new Wallet(mem, state, session, identity, derivation);
+        // §4.2/§4.3: the link key pair of §11, owned by Transfer; Wallet only
+        // overwrites its private half inside its own transactions
+        KeyPair link = Transfer.newLinkKey();
+        wallet =
+                new Wallet(
+                        mem,
+                        state,
+                        session,
+                        identity,
+                        derivation,
+                        secp,
+                        (ECPrivateKey) link.getPrivate());
+        transfer = new Transfer(mem, state, session, identity, secp, derivation, wallet, link);
         register(bArray, (short) (bOffset + 1), bArray[bOffset]);
     }
 
@@ -208,6 +223,18 @@ public final class WalletApplet extends Applet {
                 case Const.INS_SIGN_BIP340:
                     out = bip340.sign(buf, dataOff);
                     break;
+                case Const.INS_OFFER:
+                    out = transfer.offer(buf);
+                    break;
+                case Const.INS_EXPORT:
+                    out = p1 == 0 ? transfer.export0(buf, dataOff) : transfer.export1(buf, dataOff);
+                    break;
+                case Const.INS_IMPORT:
+                    out =
+                            p1 == 0
+                                    ? transfer.import0(buf, dataOff)
+                                    : transfer.import1(buf, dataOff, dataLen);
+                    break;
                 case Const.INS_SIGN_ED25519:
                     // §9.11 streams the message; checkLength already bounded dataLen per P1
                     if (p1 == 0) {
@@ -279,6 +306,25 @@ public final class WalletApplet extends Applet {
                 // §9.10: message(32) ‖ tweak(32) ‖ path — a shorter body can't
                 // equal 65 + 4·depth ≥ 65 (the depth-byte read stays in the buffer)
                 if (dataLen != (short) (65 + (buf[(short) (dataOff + 64)] & 0xFF) * 4)) {
+                    ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+                }
+                return;
+            case Const.INS_OFFER:
+                if (dataLen != 0) {
+                    ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+                }
+                return;
+            case Const.INS_EXPORT:
+                if (dataLen != (p1 == 0 ? (short) 226 : Const.HASH_LEN)) {
+                    ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+                }
+                return;
+            case Const.INS_IMPORT:
+                if (p1 == 0) {
+                    if (dataLen != (short) 226) {
+                        ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+                    }
+                } else if (dataLen != (short) 160 && dataLen != (short) 176) {
                     ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
                 }
                 return;

@@ -25,6 +25,17 @@ spotless {
     }
 }
 
+// spotless#2850: a clean in the same invocation clears the daemon-wide formatter
+// classloader cache once per build; a spotless task running after it hits a closed
+// jar, which cascades into NoClassDefFoundError lint errors. Order every spotless
+// task after every clean in every project — mustRunAfter never forces a clean.
+allprojects {
+    val allCleans = rootProject.allprojects.map { p -> p.tasks.matching { it.name == "clean" } }
+    tasks.matching { it.name.startsWith("spotless") }.configureEach {
+        mustRunAfter(allCleans)
+    }
+}
+
 subprojects {
     apply(plugin = "com.diffplug.spotless")
 

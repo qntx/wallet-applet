@@ -110,6 +110,23 @@ final class State {
         return o;
     }
 
+    /** The coded {@code offer}; a non-member read is a detected fault (§16.2 item 1). */
+    short offer() {
+        short o = Util.getShort(state, OFF_OFFER);
+        if (o != Const.OFFER_NONE && o != Const.OFFER_VALID) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        return o;
+    }
+
+    /**
+     * Constant-time {@code Bytes.equal} of a region of the persistent array against {@code b},
+     * without copying it out — for the membership and re-seal equality checks of §9.13–9.14.
+     */
+    short equal(short off, byte[] b, short bOff, short len) {
+        return Bytes.equal(state, off, b, bOff, len);
+    }
+
     /** Atomic write of a coded life value; only inside the transaction that owns it. */
     void setLife(short life) {
         Util.setShort(state, OFF_LIFE, life);
