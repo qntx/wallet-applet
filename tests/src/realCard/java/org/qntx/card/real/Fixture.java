@@ -173,8 +173,8 @@ public final class Fixture {
     }
 
     /**
-     * True FACTORY for tests that cannot run in a later life state (a BLANK/LOADED card has no
-     * way back): reinstalls the selected wallet CAP unless the card is already known FACTORY.
+     * True FACTORY for tests that cannot run in a later life state (a BLANK/LOADED card has no way
+     * back): reinstalls the selected wallet CAP unless the card is already known FACTORY.
      */
     public static void ensureStrictFactory() throws Exception {
         if (life != Life.FACTORY) {
