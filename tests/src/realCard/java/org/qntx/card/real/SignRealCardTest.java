@@ -55,7 +55,11 @@ final class SignRealCardTest {
         System.arraycopy(digest, 0, ecdsa, 0, 32);
         System.arraycopy(Vecs.pathSecpEvm(), 0, ecdsa, 32, Vecs.pathSecpEvm().length);
         assertEquals(0x6982, inner(0x31, 0, ecdsa).sw(), "SIGN_ECDSA unverified");
-        assertEquals(0x6982, inner(0x32, 0, new byte[64]).sw(), "SIGN_BIP340 unverified");
+        // §9.2 order checks length before the verified gate: the body must be a
+        // well-formed message‖tweak‖path for the 6982 row to be reached
+        byte[] bip = new byte[64 + Vecs.pathSecpEvm().length];
+        System.arraycopy(Vecs.pathSecpEvm(), 0, bip, 64, Vecs.pathSecpEvm().length);
+        assertEquals(0x6982, inner(0x32, 0, bip).sw(), "SIGN_BIP340 unverified");
         assertEquals(0x6982, inner(0x33, 0, Vecs.pathEdSolana()).sw(), "ed begin unverified");
         Fixture.verify(session);
         assertEquals(0x6A86, inner(0x31, 1, ecdsa).sw(), "SIGN_ECDSA P1");
