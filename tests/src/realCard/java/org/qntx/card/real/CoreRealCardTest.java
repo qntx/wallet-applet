@@ -314,13 +314,19 @@ final class CoreRealCardTest {
         // the NDEF applet shares the wallet's context: selecting it deselects the wallet,
         // whose §8.5 teardown must wipe the session — the P-R2 case on silicon
         assertEquals(0x9000, RealCard.sw(card.transmit(Spec.SELECT_NDEF)), "SELECT NDEF applet");
+        // the record APDU now reaches the NDEF applet: wrong CLA proves selection moved
+        assertEquals(
+                0x6E00,
+                RealCard.sw(card.transmit(s.wrap(0x20, 0, 0, new byte[0]))),
+                "record APDU routed to NDEF");
+        // re-SELECT enters a fresh epoch: deselect() has wiped the session (P-R2)
+        card.ok(Spec.SELECT);
         assertEquals(
                 0x6985,
                 RealCard.sw(card.transmit(s.wrap(0x20, 0, 0, new byte[0]))),
-                "wallet record after NDEF selection");
+                "wallet record after NDEF deselected the wallet");
         s.close();
-        // re-SELECT enters a fresh epoch: OPEN works again (F2 domain reload)
-        card.ok(Spec.SELECT);
+        // OPEN works again on the fresh epoch (F2 domain reload)
         assertEquals(
                 0x9000,
                 RealCard.sw(card.transmit(Open.request(Vecs.RND).apdu())),

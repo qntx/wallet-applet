@@ -159,7 +159,8 @@ final class InstallRealCardTest {
         Fixture.select();
         assertOpen();
         Session s = Fixture.open();
-        Fixture.verify(s);
+        // VERIFY is a LOADED-state command (§9.5); on a BLANK card a STATUS proves the epoch
+        assertEquals(0x9000, Fixture.cmd(s, 0x20, 0, 0, new byte[0]).sw(), "STATUS in BLANK");
         s.close();
     }
 

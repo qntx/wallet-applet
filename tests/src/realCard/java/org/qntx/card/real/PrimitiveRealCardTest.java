@@ -120,7 +120,18 @@ final class PrimitiveRealCardTest {
         ok(0x10, 0, secp); // ecPriv[0] ← secp256k1
         ok(0x11, 0, sBytes); // ecPriv[0].S
         ok(0x10, 1, wei); // ecPriv[1] ← Wei25519
-        ok(0x11, 1, sBytes); // ecPriv[1].S (scalar field is the same encoding)
+        // a 255-bit scalar exceeds the Wei25519 order (≈2²⁵²): the engine would reject it at
+        // generateSecret (CryptoException ILLEGAL_USE), so reduce it mod ℓ like the admission row
+        BigInteger weiN = new BigInteger(1, Arrays.copyOfRange(wei, 161, 193));
+        byte[] sWei = new byte[32];
+        byte[] swb = s.mod(weiN.subtract(BigInteger.ONE)).add(BigInteger.ONE).toByteArray();
+        System.arraycopy(
+                swb,
+                Math.max(0, swb.length - 32),
+                sWei,
+                Math.max(0, 32 - swb.length),
+                Math.min(32, swb.length));
+        ok(0x11, 1, sWei); // ecPriv[1].S
         ok(0x10, 2, secp); // ecPub[0] domain
         ok(0x10, 3, secp); // ecPub[1] domain
         ok(0x12, 3, wPoint); // ecPub[1].W = s·G — the verify target of prim 0x10

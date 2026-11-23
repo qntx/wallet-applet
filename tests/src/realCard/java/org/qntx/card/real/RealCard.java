@@ -40,6 +40,9 @@ public final class RealCard implements AutoCloseable {
     /** GET DATA of the CPLC (GlobalPlatform tag 9F7F); works unauthenticated on the ISD. */
     public static final byte[] GET_DATA_CPLC = HexFormat.of().parseHex("80CA9F7F00");
 
+    /** JCOP IDENTIFY (80 CA 00 FE, tag DF28); the ISD answers a blob carrying the build string. */
+    public static final byte[] GET_DATA_IDENTIFY = HexFormat.of().parseHex("80CA00FE02DF28");
+
     /** §2 package AID (production and memprobe builds). */
     public static final String PACKAGE_AID = "F0716E747800";
 
@@ -60,10 +63,11 @@ public final class RealCard implements AutoCloseable {
     public static final String PROBE_APPLET_AID = "F0716E7478FF01";
 
     /**
-     * NDEF install parameters {@code C9 ‖ len ‖ msg} — the ndef.json sample message, pre-wrapped in
-     * C9 exactly like {@code InstallCmd.c9} so GPPro's own wrap is skipped (§14.3, §15).
+     * NDEF install parameters: the raw ndef.json sample message. GPPro wraps plain parameters in
+     * the {@code C9} tag itself — passing the pre-wrapped form would double-wrap and store the C9
+     * header as message content (§14.3, §15).
      */
-    private static final String NDEF_PARAMS = "C90ED1010C5402656E716E74782063617264";
+    private static final String NDEF_PARAMS = "D1010C5402656E716E74782063617264";
 
     static {
         // macOS JDKs do not always find the framework on their own
@@ -138,9 +142,9 @@ public final class RealCard implements AutoCloseable {
 
     /**
      * The silicon identity beyond the ATR (architecture §10): the CPLC of the ISD must name the
-     * card-A fabricator 4790 and IC type D321, and the GP wrapper's {@code --info} output must
-     * carry the JCOP IDENTIFY build string. Both land in {@code <out>/gp-*.log} / {@code cplc.bin}
-     * for the batch record.
+     * card-A fabricator 4790 and IC type D321, and the ISD's JCOP IDENTIFY answer must carry the
+     * {@code J3R…} build string. Both land in {@code <out>/cplc.bin} / {@code identify.bin} (plus
+     * {@code gp-*.log}) for the batch record.
      */
     public void verifySilicon() throws Exception {
         transmit(SELECT_ISD);
@@ -159,12 +163,16 @@ public final class RealCard implements AutoCloseable {
                             + String.format("%04X", icType)
                             + " is not card A silicon (4790/D321) — stopping");
         }
-        // JCOP IDENTIFY: GPPro prints the build string (J3R…) or its hex form in --info
-        String info = gp("identify", "--info");
-        String upper = info.toUpperCase();
-        if (!upper.contains("J3R") && !upper.contains("4A3352")) {
-            throw new IllegalStateException(
-                    "no JCOP IDENTIFY build string in gp --info — not card A silicon");
+        // JCOP IDENTIFY: GPPro's --info prints only the CPLC, so the build string (J3R…) is
+        // read straight from the ISD's DF28 answer; --info still lands in gp-*.log
+        gp("identify", "--info");
+        byte[] identify = transmit(GET_DATA_IDENTIFY);
+        Files.write(
+                out.resolve("identify.bin"),
+                java.util.Arrays.copyOf(identify, identify.length - 2));
+        String id = new String(identify, java.nio.charset.StandardCharsets.ISO_8859_1);
+        if (!id.contains("J3R")) {
+            throw new IllegalStateException("no JCOP IDENTIFY build string — not card A silicon");
         }
     }
 

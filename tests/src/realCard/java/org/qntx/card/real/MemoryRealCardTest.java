@@ -257,7 +257,7 @@ final class MemoryRealCardTest {
         // T-EDCTR: the Ed25519 begin commits edCounter before r is computed (§12.3)
         assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw(), "ed begin");
         record("T-EDCTR", probe());
-        assertEquals(0x9000, inner(0x33, 2, new byte[0]).sw(), "ed finish closes the stream");
+        assertEquals(0x9000, inner(0x33, 2, new byte[] {0x00}).sw(), "ed finish closes the stream");
     }
 
     @Test

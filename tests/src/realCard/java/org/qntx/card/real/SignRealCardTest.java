@@ -68,7 +68,7 @@ final class SignRealCardTest {
         assertEquals(0x6A86, inner(0x32, 3, new byte[64]).sw(), "SIGN_BIP340 P1");
         assertEquals(0x6A86, inner(0x33, 3, Vecs.pathEdSolana()).sw(), "ed P1 range");
         assertEquals(0x6985, inner(0x33, 1, new byte[8]).sw(), "update without a stream");
-        assertEquals(0x6985, inner(0x33, 2, new byte[0]).sw(), "finish without a stream");
+        assertEquals(0x6985, inner(0x33, 2, new byte[8]).sw(), "finish without a stream");
         session.close();
     }
 

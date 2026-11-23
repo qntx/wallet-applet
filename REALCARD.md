@@ -19,7 +19,8 @@ A card is accepted only when **all** of these hold:
    every power cycle;
 2. the ISD's CPLC (`GET DATA 9F7F`) names fabricator `4790` and IC type `D321` — stored as
    `cplc.bin` for the batch record;
-3. the GP wrapper's `--info` output carries the JCOP IDENTIFY build string (`J3R…`).
+3. the ISD's JCOP IDENTIFY answer (`GET DATA 00FE`, tag `DF28`) carries the build string
+   (`J3R…`) — stored as `identify.bin`.
 
 ## Rules
 
