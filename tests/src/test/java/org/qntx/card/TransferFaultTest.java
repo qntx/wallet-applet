@@ -825,30 +825,121 @@ final class TransferFaultTest {
         }
     }
 
+    /** The member count of {@code side}'s persistent members block {@code c ‖ ID₁ ‖ …}. */
+    private static int memberCount(Side side) {
+        return Internals.stateArray(side.card.applet(Spec.WALLET_AID))[State.OFF_MEMBERS] & 0xFF;
+    }
+
+    /**
+     * The index of {@code id} in {@code side}'s persistent members block — the loop position {@code
+     * memberSlot} compares {@code P_SELF} and {@code P_CAND} at.
+     */
+    private static int memberIndex(Side side, byte[] id) {
+        byte[] state = Internals.stateArray(side.card.applet(Spec.WALLET_AID));
+        for (int i = 0; i < (state[State.OFF_MEMBERS] & 0xFF); i++) {
+            boolean eq = true;
+            for (int j = 0; j < 16; j++) {
+                eq &= state[State.OFF_MEMBERS + 1 + 16 * i + j] == id[j];
+            }
+            if (eq) {
+                return i;
+            }
+        }
+        throw new AssertionError("id is not a member");
+    }
+
+    /**
+     * The {@code Bytes.equal} evaluation number of memberSlot call {@code nth}'s first member
+     * compare in {@code ins} {@code P1 = 00}: the call is armed to throw after its body ran, so the
+     * dry-run count through the abort is the last of its {@code 2c} compares. Ends the session —
+     * the caller reopens before the next run.
+     */
+    private static int memberSlotFirstEval(Side side, int ins, byte[] data, int nth, int c)
+            throws Exception {
+        try {
+            Fault.armThrow("Transfer.memberSlot", nth);
+            side.inner(ins, 0, data);
+            return Fault.calls("Bytes.equal") - 2 * c + 1;
+        } finally {
+            Fault.reset();
+        }
+    }
+
     @Test
     void memberSlotSelfForced() throws Exception {
-        // evals 1-2 of Bytes.equal are the record tag, 3 is the A != A self-check; per
-        // member i the self compare is 4+2i and the candidate compare 5+2i — a self left
-        // unfound or a self landing on the candidate position is a coded fault, 6F00
+        // the self compare at the candidate's member position in each memberSlot call
+        // of EXPORT P1=00, forced to CHECK_OK: self == found must fault (6F00), never
+        // return a slot. Every eval number is derived — the dry-run total covers the
+        // record tag, the A != A check, both memberSlot calls and the decompress and
+        // setPeer compares between them, so a reorder fails loudly
         Side target = new Side();
         Side source = loaded(target);
         byte[] data = concat(target.cert, target.offer());
+        assertEquals(
+                13,
+                measure(source, INS_EXPORT, 0, data, "Bytes.equal"),
+                "Bytes.equal evaluations of EXPORT P1=00");
+        int c = memberCount(source);
+        int self = memberIndex(source, Ids.cardId(source.a));
+        int cand = memberIndex(source, Ids.cardId(target.a));
+        int first = memberSlotFirstEval(source, INS_EXPORT, data, 1, c);
+        source.reopen();
+        source.verify();
         try {
-            Fault.arm("Bytes.equal", 4, Const.CHECK_FAIL);
-            Fault.arm("Bytes.equal", 6, Const.CHECK_FAIL);
+            // a self left unfound is a coded fault: the self compare at self's own
+            // position of memberSlot call 1 forced FAIL
+            Fault.arm("Bytes.equal", first + 2 * self, Const.CHECK_FAIL);
             assertEquals(0x6F00, source.inner(INS_EXPORT, 0, data).sw(), "self missing");
         } finally {
             Fault.reset();
         }
         source.reopen();
         source.verify();
+        int second = memberSlotFirstEval(source, INS_EXPORT, data, 2, c);
+        source.reopen();
+        source.verify();
         try {
-            // the self compare forced at the candidate's position in both memberSlot
-            // calls (evals 6 and 11; the setPeer compare is eval 8): self == found
-            // must fault, never return a slot
-            Fault.arm("Bytes.equal", 6, Const.CHECK_OK);
-            Fault.arm("Bytes.equal", 11, Const.CHECK_OK);
+            armSelfIsFound(first, second, self, cand);
             assertEquals(0x6F00, source.inner(INS_EXPORT, 0, data).sw(), "self is found");
+        } finally {
+            Fault.reset();
+        }
+    }
+
+    /**
+     * Arms the {@code Bytes.equal} evaluations of both memberSlot calls so the loop ends with
+     * {@code self == found}: the self compare at the candidate's position and the candidate compare
+     * at self's, each forced CHECK_OK — the loop assigns on every match, so whichever position is
+     * compared last leaves the two on one index.
+     */
+    private static void armSelfIsFound(int first, int second, int self, int cand) {
+        Fault.arm("Bytes.equal", first + 2 * cand, Const.CHECK_OK);
+        Fault.arm("Bytes.equal", first + 2 * self + 1, Const.CHECK_OK);
+        Fault.arm("Bytes.equal", second + 2 * cand, Const.CHECK_OK);
+        Fault.arm("Bytes.equal", second + 2 * self + 1, Const.CHECK_OK);
+    }
+
+    @Test
+    void import0MemberSlotSelfForced() throws Exception {
+        // the same case on IMPORT P1=00 of a LOADED target — the imported members keep
+        // the payload order, so self need not precede the candidate
+        Side source = new Side();
+        Side target = loadedTarget(source);
+        byte[] data = concat(source.cert, export(source, target)[0]);
+        assertEquals(
+                14,
+                measure(target, INS_IMPORT, 0, data, "Bytes.equal"),
+                "Bytes.equal evaluations of IMPORT P1=00");
+        int c = memberCount(target);
+        int self = memberIndex(target, Ids.cardId(target.a));
+        int cand = memberIndex(target, Ids.cardId(source.a));
+        int first = memberSlotFirstEval(target, INS_IMPORT, data, 1, c);
+        target.reopen();
+        int second = memberSlotFirstEval(target, INS_IMPORT, data, 2, c);
+        target.reopen();
+        try {
+            armSelfIsFound(first, second, self, cand);
+            assertEquals(0x6F00, target.inner(INS_IMPORT, 0, data).sw(), "self is found");
         } finally {
             Fault.reset();
         }
