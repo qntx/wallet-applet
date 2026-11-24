@@ -121,7 +121,8 @@ NXP JCOP 4 P71, J3R180 class):
 The silicon MUST additionally behave as follows. Each item is an admission test run on every
 silicon batch before personalisation (`docs/architecture.md` §10). A batch that fails any item is
 not used: there is no fallback implementation and no protocol variant. Items 1–5 and 7 passed on
-the development card (JCOP 4 P71, CPLC IC type `D321`). For item 9 the iteration cost was
+development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPLC IC type
+`D321`). For item 9 the iteration cost was
 measured on the same card (2.37 ms per 32-byte SHA-256), which gives 965 ms per `WAIT`; the full
 command is timed by the real-card suite.
 
@@ -1164,9 +1165,9 @@ cleared together with its value (on the development card on every deselection, i
 re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`, before any
 use (§8.5). Each initialisation step of §4.3 MUST complete within
 500 ms; on the baseline chip every command MUST complete within
-1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Measured on the
-development card (JCOP 4 P71, J3R351, contactless, host-side round trip including transport;
-median / p95 ms, n):
+1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Measured on
+development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, contactless,
+host-side round trip including transport; median / p95 ms, n):
 
 | Command | median | p95 | n |
 | --- | --- | --- | --- |

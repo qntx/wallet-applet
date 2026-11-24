@@ -15,9 +15,11 @@ the invariants every change keeps.
 
 Everything of qntx card protocol 1 is implemented: the wallet and NDEF applets (§5–§15), the
 simulator, the host library, the provisioning tool and the vectors. The protocol is **not
-frozen**: it freezes only after the external audit (`spec/protocol.md` §17), and the real-card
-suite below has not run on hardware yet — every §10 row exists and has been self-checked on the
-simulator only.
+frozen**: it freezes only after the external audit (`spec/protocol.md` §17). The real-card
+suite below has run once on development card A (J3R180 hardware reporting JCOP build
+`J3R3510236310400`); its multi-card flow, tearing and NVM-endurance rows report
+`unavailable` until the hardware they need exists (a second card, a programmable reader, a
+sacrificial card), and fault injection on silicon has not been done.
 
 ## Layout
 
@@ -49,7 +51,7 @@ spec/vectors/gen/check.sh  # both vector generators agree
 The CAP is `applet/build/cap/qntx-card.cap`; two builds of the same sources have the same SHA-256.
 Tests run the applet's JVM classes in the simulator with the `sim` agent (`-javaagent`), which
 journals persistent writes, injects power loss and accounts transient memory with sizes measured on
-the baseline chip (NXP JCOP 4 P71).
+card A (J3R180 hardware reporting JCOP build `J3R3510236310400`).
 
 ## Simulator (`card-sim.jar`)
 
@@ -167,13 +169,16 @@ Every run leaves its evidence under `$realCardOut`: `apdu.log`, `gp-*.log`, `cpl
 per-row `*.json`/`*.bin` reports (`init.json`, `install-journal.json`, `commit-capacity.json`,
 `rng.json`, `memory.json`, `timing.json`/`timing.md`, `signatures.json`,
 `primitives.json`/`primitives.md`), which feed the batch
-record of §10.
+record of §10. A run with a reader also writes `record.txt` (the `realCardRecord` task
+finalizes `realCard`): one `PASS`/`FAIL`/`SKIP` line per test class plus the timing table. It
+is copied to [`realcard/<cap-sha256>.txt`](realcard/) and committed before a release tag —
+`release.yml` refuses the tag without it.
 
 Without `-PrealCard` every test still skips as "not run"; the table below is the suite's own
 `timing.md` from the final card-A run (2026-11-23, ACS ACR1552 1S CL Reader PICC, contactless;
 CAP sha256 `a6e9d2f21fc72c2aea1b4e8b5eb714dd692acb3a8ee217bc7ac08ba034417e5f`).
 
-### Timings (measured on J3R180 (card A))
+### Timings (measured on card A — J3R180 hardware reporting JCOP build `J3R3510236310400`)
 
 | command | n | min | median | p95 | max | bound ms | ≤bound |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -263,39 +268,15 @@ qntx-card personalise --sim 127.0.0.1:35963 --scp 03 --baseline baseline.txt \
 
 Measured on this tree (architecture §14.7 R6; the CI build job reports them again):
 
-- **CAP**: `qntx-card.cap` is 132,813 B; the load-file components inside it
-  (`org/qntx/card/javacard/*.cap`) total 27,643 B.
+- **CAP**: `qntx-card.cap` is 133,675 B; the load-file components inside it
+  (`org/qntx/card/javacard/*.cap`) total 27,822 B.
 - **Transient**: the simulator's memory report ends `total 2776 / 3990 (budget 3390)` — 2,776 B
   of the 3,990 B JCAlgTest pool, inside the §5.1 acceptance budget of 3,390 B.
 - **Persistent**: ≈ 7.1 KB of objects and arrays plus the ≈ 28 KB CAP against the 157,524 B
-  J3R180 NVM (architecture §5.1). That is the architecture estimate — the simulator accounts
-  transient bytes only, so it is not re-measured here.
-- **Card time** (protocol §16.6, computed from unit costs measured on development card A; full
-  commands not yet timed — the real-card `Timing` row does that):
-
-| Command | ms | bytes up | bytes down |
-| --- | ---: | ---: | ---: |
-| SELECT | 2 | 13 | 2 |
-| OPEN | 160 | 71 | 228 |
-| STATUS | 17 | 30 | 26 |
-| VERIFY | 124 | 62 | 106 |
-| WAIT | 965 | 30 | 26 |
-| CREATE | 106 | 126 | 106 |
-| CHANGE | 27 | 62 | 26 |
-| ERASE | 25 | 30 | 26 |
-| OFFER | 137 | 30 | 154 |
-| OFFER_VALID | 78 | 30 | 154 |
-| EXPORT0 | 424 | 254 | 154 |
-| EXPORT1 | 21 | 62 | 202 |
-| IMPORT0 | 471 | 254 | 26 |
-| IMPORT1 | 103 | 206 | 106 |
-| PUBLIC_KEY secp256k1 depth 3 cold | 202 | 46 | 90 |
-| PUBLIC_KEY ed25519 depth 4 cold | 217 | 46 | 90 |
-| SIGN_ECDSA depth 5 cold | 411 | 78 | 90 |
-| SIGN_BIP340 depth 5 cold | 724 | 110 | 90 |
-| SIGN_ED25519 BEGIN depth 4 cold | 430 | 46 | 90 |
-| SIGN_ED25519 UPDATE 236 B | 21 | 254 | 26 |
-| SIGN_ED25519 FINISH | 486 | 30 | 58 |
+  NVM of card A's silicon (architecture §5.1). That is the architecture estimate — the
+  simulator accounts transient bytes only, so it is not re-measured here.
+- **Card time**: measured on card A — see the Timings table above and `spec/protocol.md`
+  §16.6 (EXPORT/IMPORT are measured against a host-emulated member card).
 
 ## Hosts
 
@@ -306,8 +287,15 @@ Measured on this tree (architecture §14.7 R6; the CI build job reports them aga
 
 ## Releases
 
-Tag `v<version>` (the `version` in `gradle.properties`) runs `release.yml`, which builds from a
-clean checkout, runs the full gate, produces `build/dist/` and publishes it as a GitHub release:
+Tag `v<version>` (the `version` in `gradle.properties`) runs `release.yml`. First the `gate`
+job calls `ci.yml` as a workflow — REUSE lint, Spotless, build + all tests, the noble
+differential, reproducible CAP and card-sim, PIT, the SBOM, `dist` and both vector generators
+must pass on the tagged commit. Then the `release` job checks the tag equals the version,
+refuses the tag unless a committed real-card record
+[`realcard/<cap-sha256>.txt`](realcard/) exists for this CAP hash with `failed 0` and
+`InstallRealCardTest` passing, rebuilds `build/dist/` with toolchain auto-download off (the
+JDK comes only from setup-java), proves the rebuilt CAP is byte-identical to the released one,
+verifies `SHA256SUMS`, attests build provenance and publishes a GitHub release:
 
 - `qntx-card.cap` — the one CAP (package `F0716E747800`)
 - `card-sim.jar` — the simulator

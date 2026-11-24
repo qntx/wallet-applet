@@ -186,7 +186,7 @@ that begins, writes and commits, with no other persistent write inside or outsid
 
 ## 5. Memory
 
-### 5.1 Budget (J3R180)
+### 5.1 Budget (card A: J3R180, JCOP build J3R351…)
 
 Transient sizes measured in the simulator (sizes from card A); the persistent column stays an
 estimate where nothing measures it.
@@ -527,8 +527,12 @@ card of `REALCARD.md`, never a production batch.
 
 Rows 1–9 are the admission items of `protocol.md` §3. Evidence lands under `-PrealCardOut`
 (default `tests/build/realcard/`): the `*.json`/`*.bin` reports above plus `apdu.log`,
-`gp-*.log` and `cplc.bin`, which feed the batch record. Audit-impl ran admission 1–5 and 7 on
-development card A (JCOP4 P71, CPLC IC type `D321`, batch `2092`) and they passed
+`gp-*.log` and `cplc.bin`, which feed the batch record. A run with a reader ends with
+`record.txt` (the `realCardRecord` task, `finalizedBy` `realCard`): the run's CAP sha256,
+reader, per-class `PASS`/`FAIL`/`SKIP` and the timing table — committed as
+`realcard/<cap-sha256>.txt` before a tag (§12). Audit-impl ran admission 1–5 and 7 on
+development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPLC IC type
+`D321`, batch `2092`) and they passed
 (`$A/audit-impl/evidence/card/functional.out`); admission must be repeated on each production
 batch. Multi-card flows are simulation-only while only one development card exists.
 
@@ -569,17 +573,22 @@ behaviour is UNVERIFIED.
 
 ## 12. CI and release
 
-- `ci.yml` (pull requests and `main`): REUSE lint, Spotless check, build CAP (twice, compare
-  hash), unit + command + tearing + vector + fuzz-smoke tests, vector generator agreement (JDK 25
-  and Bun), PIT on gate classes, memory report vs §5.1 budget, CAP size report. Actions pinned
-  by commit SHA, `permissions: contents: read`.
-- `release.yml` (tags `v*`): build from a clean checkout; upload `qntx-card.cap`,
-  `card-sim.jar`, `vectors.zip`, `tools` distribution, CycloneDX SBOM, `SHA256SUMS`; build
-  provenance via `actions/attest-build-provenance`; release notes list the protocol version and
-  the CAP hash. Permissions: `contents: write`, `id-token: write`, `attestations: write`.
+- `ci.yml` (pull requests, `main` and `workflow_call`): REUSE lint, Spotless check, build CAP
+  (twice, compare hash), unit + command + tearing + vector + fuzz-smoke tests, vector
+  generator agreement (JDK 25 and Bun), PIT on gate classes, memory report vs §5.1 budget, CAP
+  size report. Actions pinned by commit SHA, `permissions: contents: read`.
+- `release.yml` (tags `v*`): a `gate` job runs `ci.yml` on the tagged commit; the release job
+  then checks tag = version, requires a committed `realcard/<cap-sha256>.txt` record for the
+  CAP hash with `failed 0` and `InstallRealCardTest` PASS, rebuilds `build/dist/` with
+  toolchain auto-download off, re-proves the CAP reproducible, verifies `SHA256SUMS` and
+  uploads `qntx-card.cap`, `card-sim.jar`, `vectors.zip`, the `tools` distribution, the
+  CycloneDX SBOM; build provenance via `actions/attest-build-provenance`; release notes list
+  the protocol version, the CAP hash and the record. Top-level `permissions: {}`; the release
+  job holds `contents: write`, `id-token: write`, `attestations: write`.
 - Before any tag, the real-card gate of §10 — install the production CAP on card A, then `OPEN`
-  across three select epochs and a power cycle (`InstallRealCardTest`) — MUST have passed on the
-  tagged commit; CI cannot run it, so the result is recorded in the release notes.
+  across three select epochs and a power cycle (`InstallRealCardTest`) — MUST have passed on
+  the tagged commit; CI cannot run it, so a passing `record.txt` is committed as
+  `realcard/<cap-sha256>.txt` and the release job checks the file itself.
 
 ## 13. Repository `AGENTS.md`
 

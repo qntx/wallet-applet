@@ -1,5 +1,7 @@
 import java.io.File
 import java.security.MessageDigest
+import java.time.Instant
+import javax.xml.parsers.DocumentBuilderFactory
 
 plugins {
     java
@@ -268,6 +270,113 @@ tasks.register<Test>("realCard") {
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
+
+// Release evidence (realcard/, release.yml): after a realCard run with a reader, distil
+// the run's JUnit XML into <realCardOut>/record.txt — totals plus one verdict line per
+// test class, then the timing table — for commit as realcard/<cap-sha256>.txt. Without
+// -PrealCard no reader was present and the record must not be written.
+val realCardRecord by tasks.registering {
+    group = "verification"
+    description =
+        "Writes <realCardOut>/record.txt from the realCard run's JUnit XML; skipped without" +
+        " -PrealCard."
+    val readerProp = providers.gradleProperty("realCard")
+    val capProp = providers.gradleProperty("realCardCap")
+    val outProp = providers.gradleProperty("realCardOut")
+    onlyIf("no reader run: -PrealCard is absent") { readerProp.isPresent }
+    doLast {
+        val capFile = capProp.map { File(it) }.getOrElse(cap.get().asFile)
+        val capSha =
+            MessageDigest
+                .getInstance("SHA-256")
+                .digest(capFile.readBytes())
+                .joinToString("") { "%02x".format(it) }
+        val xmlDir =
+            tasks
+                .named("realCard", Test::class)
+                .get()
+                .reports.junitXml.outputLocation
+                .get()
+                .asFile
+        val dbf = DocumentBuilderFactory.newInstance()
+        dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        val db = dbf.newDocumentBuilder()
+        var passed = 0
+        var failed = 0
+        var skipped = 0
+        val verdicts = sortedMapOf<String, String>()
+        for (
+        file in
+        checkNotNull(xmlDir.listFiles { f -> f.name.startsWith("TEST-") }).sortedBy {
+            it.name
+        }
+        ) {
+            val testcases =
+                db
+                    .parse(file)
+                    .getElementsByTagName("testcase")
+            var total = 0
+            var bad = 0
+            var skip = 0
+            for (i in 0 until testcases.length) {
+                val tc = testcases.item(i) as org.w3c.dom.Element
+                total++
+                if (
+                    tc.getElementsByTagName("failure").length > 0 ||
+                    tc.getElementsByTagName("error").length > 0
+                ) {
+                    bad++
+                } else if (tc.getElementsByTagName("skipped").length > 0) {
+                    skip++
+                }
+            }
+            passed += total - bad - skip
+            failed += bad
+            skipped += skip
+            val name = file.name.removePrefix("TEST-").removeSuffix(".xml")
+            verdicts[name] =
+                if (bad > 0) {
+                    "FAIL"
+                } else if (skip == total) {
+                    "SKIP"
+                } else {
+                    "PASS"
+                }
+        }
+        val outDir =
+            outProp
+                .map { File(it) }
+                .getOrElse(
+                    layout.buildDirectory
+                        .dir("realcard")
+                        .get()
+                        .asFile,
+                )
+        outDir.mkdirs()
+        val record = File(outDir, "record.txt")
+        val text =
+            buildString {
+                append("qntx-card real-card record\n")
+                append("cap ").append(capSha).append('\n')
+                append("date ").append(Instant.now().toString()).append('\n')
+                append("reader ").append(readerProp.get()).append('\n')
+                append("passed ").append(passed).append('\n')
+                append("failed ").append(failed).append('\n')
+                append("skipped ").append(skipped).append('\n')
+                for ((name, verdict) in verdicts) {
+                    append(verdict).append(' ').append(name).append('\n')
+                }
+                val timing = File(outDir, "timing.md")
+                if (timing.isFile) {
+                    append('\n').append(timing.readText())
+                }
+            }
+        record.writeText(text)
+        println("wrote ${record.absolutePath}")
+    }
+}
+
+tasks.named("realCard") { finalizedBy(realCardRecord) }
 
 tasks.check { dependsOn(admissionProbeCap, memProbeCap, "compileRealCardJava") }
 
