@@ -443,8 +443,9 @@ final class TransferFaultTest {
         byte[] data = concat(target.cert, target.offer());
         assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw());
         int calls = measure(source, INS_EXPORT, 1, Vecs.accessHashNew(), "Session.verified");
-        // the guarded double evaluation before the payload is output
-        assertTrue(calls >= 2, "verified evaluations " + calls);
+        // the dispatch gate plus the guarded double evaluation before the payload is
+        // output: M29 (the first in-handler check deleted) drops this to 2
+        assertEquals(3, calls, "verified evaluations");
         for (int i = 1; i <= calls; i++) {
             source.reopen();
             source.verify();

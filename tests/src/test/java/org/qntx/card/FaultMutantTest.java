@@ -11,6 +11,7 @@ import javacard.framework.Applet;
 import javacard.framework.Util;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.qntx.card.host.Ids;
 import org.qntx.card.host.Response;
 import org.qntx.card.host.Session;
 import org.qntx.card.sim.Card;
@@ -396,6 +397,45 @@ final class FaultMutantTest {
         verified();
         Fault.arm("Session.verified", 3, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x30, 0, Vecs.pathSecpEvm()).sw());
+        assertTrue(!blank());
+    }
+
+    /**
+     * A verified session on a LOADED source — {@code target} is its other member — with the pending
+     * export of a genuine {@code EXPORT P1 = 0x00}.
+     */
+    private void pendingExport() throws Exception {
+        Card target = Vecs.blankSelf();
+        Session ts = Vecs.open(target);
+        Response offer = Vecs.roundtrip(target, ts, 0x40, 0, 0, new byte[0]);
+        assertEquals(0x9000, offer.sw(), "OFFER");
+        card = Vecs.blankSelf();
+        session = Vecs.open(card);
+        byte[] data = new byte[112];
+        System.arraycopy(Vecs.accessHash(), 0, data, 0, 32);
+        System.arraycopy(Vecs.seed(), 0, data, 32, 64);
+        System.arraycopy(Ids.cardId(ts.identity()), 0, data, 96, 16);
+        assertEquals(0x9000, inner(0x21, 1, data).sw(), "CREATE");
+        assertEquals(0x9000, verify(Vecs.accessHash()).sw(), "VERIFY");
+        byte[] export0 = new byte[226];
+        System.arraycopy(ts.cert(), 0, export0, 0, 97);
+        System.arraycopy(offer.data(), 0, export0, 97, 129);
+        assertEquals(0x9000, inner(0x41, 0, export0).sw(), "EXPORT0");
+    }
+
+    @Test
+    void forcedExport1VerifiedEvaluationsAreCaught() throws Exception {
+        // EXPORT P1=0x01 evaluates verified at the dispatch gate (1) and twice before
+        // the payload (2, 3): the M29 mutant — the first in-handler check deleted —
+        // leaves no third evaluation, so the eval-3 arm releases the payload on it
+        pendingExport();
+        Fault.arm("Session.verified", 2, Const.VERIFIED_NO);
+        assertEquals(0x6F00, inner(0x41, 1, Vecs.accessHashNew()).sw());
+        assertTrue(!blank());
+
+        pendingExport();
+        Fault.arm("Session.verified", 3, Const.VERIFIED_NO);
+        assertEquals(0x6F00, inner(0x41, 1, Vecs.accessHashNew()).sw());
         assertTrue(!blank());
     }
 
