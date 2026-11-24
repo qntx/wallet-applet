@@ -642,8 +642,9 @@ RFC 8032 challenge hash; hosts MUST send `encode(R) ‖ encode(A) ‖ M`, where 
 encoding of the returned `W(R)` and `encode(A)` that of `PUBLIC_KEY` for `path` (§10.4). The card
 does not parse the stream; any other stream yields a signature that is invalid under the card's
 key (§12.3). The host forms the signature `encode(R) ‖ le32(S)`. The message has no length limit.
-Note: chunks above 236 bytes cannot be carried by a command record (§8.3); the card checks the
-bound anyway. Algorithm: §12.3.
+Note: a command record carries at most 236 bytes of chunk (§8.3: `Lc ≤ 248` gives `|ct| ≤ 240`,
+hence `data ≤ 236`), so no longer chunk can reach the card and the card does not check an upper
+bound. Algorithm: §12.3.
 
 ### 9.12 OFFER (`0x40`)
 

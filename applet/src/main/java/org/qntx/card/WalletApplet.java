@@ -431,8 +431,8 @@ public final class WalletApplet extends Applet {
                 } else if (dataLen < 1) {
                     ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
                 }
-                // no upper bound to check: the record layer never delivers more
-                // than the 236-byte maximum a chunk or tail may carry
+                // no upper bound to check: §8.3 (Lc ≤ 248) bounds a record's data at
+                // 236 bytes, so no longer chunk can reach the card (§9.11)
                 return;
             default:
                 // checkLength runs only for §9.2-table INS values; the row lookup and
