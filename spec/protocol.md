@@ -1131,7 +1131,9 @@ belongs to a past transfer or ciphertext (§3 item 7).
    (transient arrays).
 2. Every transient secret is wiped after its last use in the command and on teardown, on every
    path including exceptions.
-3. After every `SESSION` the APDU buffer is overwritten where it held inner plaintext.
+3. After every `SESSION` the APDU buffer is overwritten where it held inner plaintext — including
+   when the command ends with an exception, where the whole buffer is wiped before the status word
+   is returned.
 4. Unexpected exceptions map to `6F00`; native exception reason codes are never returned.
 
 ### 16.4 Constant time

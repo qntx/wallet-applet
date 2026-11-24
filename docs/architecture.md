@@ -230,7 +230,9 @@ commands lives only in dedicated arrays: session keys and counter (`Session`), `
 (`Wallet`), seed (`Wallet`), caches (`Derivation`), stream (`Ed25519`), pending sender ID and
 transfer keys (`Transfer`).
 Record plaintext is processed in place in the APDU buffer and overwritten after the response
-(`protocol.md` §16.3).
+(`protocol.md` §16.3); when a command ends with an exception — e.g. a fault thrown inside
+`Session.wrap` — `WalletApplet.process` wipes the whole APDU buffer before the status word is
+returned, so the decrypted inner command never survives an error exit.
 
 ### 5.3 Node caches
 
