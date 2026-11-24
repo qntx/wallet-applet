@@ -580,6 +580,10 @@ Data: `accessHash(32)` (`Lc = 32`, else `6700`).
 The candidate is first used in step 7, after T-FAIL is committed and read back. A power loss
 before T-FAIL leaves no comparison performed; after it, the failure is counted. If `f₁ = L`
 and power is lost before step 9 completes, the next `VERIFY` erases at step 2 without comparing.
+This holds for a matching candidate too: with `f_a = L − 1` (`STATUS` reports `tries = 1`) T-FAIL
+is committed before the comparison, so a power loss after T-FAIL and before T-OK leaves `f = L`
+and the next `VERIFY` erases the wallet although the code was right. Hosts therefore ask the user
+to keep the card in the field for the whole duration of a `VERIFY` answered with `tries = 1`.
 A fault that skips the write or the commit of T-FAIL is caught at step 6 because the value must
 equal `f_b + 1` and the transaction must be closed (JCRE 3.2 §7.2: an uncommitted update reads
 back as its new value). The value written comes from `f_a` and the value expected from the

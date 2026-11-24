@@ -11,6 +11,11 @@ import org.bouncycastle.crypto.params.Argon2Parameters;
  * ({@code 0x20}–{@code 0x7E}), hashed with Argon2id (m = 65536 KiB, t = 3, p = 4, T = 32, version
  * 0x13, no secret, no associated data) over the per-card salt {@code "qntx-card/v1/access" ‖
  * ID(A)}.
+ *
+ * <p>Hosts: before sending a {@code VERIFY} when {@code STATUS} (§9.3) reports {@code tries = 1},
+ * tell the user to keep the card in the field until the response arrives. T-FAIL is committed
+ * before the comparison (§9.5), so a power loss during that {@code VERIFY} leaves {@code f = L} and
+ * the next {@code VERIFY} erases the wallet although the code was right.
  */
 public final class AccessCode {
     private static final byte[] LABEL = "qntx-card/v1/access".getBytes(StandardCharsets.US_ASCII);

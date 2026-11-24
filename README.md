@@ -297,6 +297,13 @@ Measured on this tree (architecture §14.7 R6; the CI build job reports them aga
 | SIGN_ED25519 UPDATE 236 B | 21 | 254 | 26 |
 | SIGN_ED25519 FINISH | 486 | 30 | 58 |
 
+## Hosts
+
+- Reader transceive timeout must be at least 5,000 ms (§16.6); slower values drop WAIT replies.
+- During a `VERIFY` when `STATUS` reports `tries = 1`, the card must stay in the field until the
+  response arrives: T-FAIL is committed before the comparison, so losing the field mid-command
+  erases the wallet at the next `VERIFY` even when the code was right (§9.5).
+
 ## Releases
 
 Tag `v<version>` (the `version` in `gradle.properties`) runs `release.yml`, which builds from a
