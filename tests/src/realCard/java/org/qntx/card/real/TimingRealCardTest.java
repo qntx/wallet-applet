@@ -4,8 +4,10 @@ package org.qntx.card.real;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -17,9 +19,13 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.qntx.card.host.Ids;
 import org.qntx.card.host.Open;
 import org.qntx.card.host.Response;
 import org.qntx.card.host.Session;
+import org.qntx.card.host.Transfer;
+import org.qntx.card.host.WalletInfo;
+import org.qntx.card.tests.EmuMember;
 import org.qntx.card.tests.Vecs;
 
 /**
@@ -32,13 +38,16 @@ import org.qntx.card.tests.Vecs;
  * <p>Wear budget: the CREATE/ERASE phase costs 20 CREATE + 20 ERASE persistent cycles per variant
  * as listed — inside the agreed allowance; the VERIFY rounds contribute the expected 40
  * verifications (20 right + 20 wrong-then-right pairs) plus ~200 untimed right VERIFYs that wipe
- * the derivation caches before each cold row.
+ * the derivation caches before each cold row. The transfer rows cost 10 T-OFFER + 10 T-INSTALL + 10
+ * T-ERASE cycles (EXPORT writes nothing persistent); the member the transfer is timed against is
+ * host-emulated ({@link EmuMember}) — the peer's crypto runs on the host, off the card's clock.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 final class TimingRealCardTest {
     private static final long LIMIT_NS = 1_500_000_000L;
     private static final long INIT_STEP_LIMIT_NS = 500_000_000L;
     private static final int RUNS = 20;
+    private static final int TRANSFER_RUNS = 10;
 
     /** Predicted card time from §16.6, milliseconds; {@code null} where §16.6 gives none. */
     private static final Map<String, Double> PREDICTED =
@@ -355,8 +364,91 @@ final class TimingRealCardTest {
         s.close();
     }
 
+    /**
+     * EXPORT/IMPORT timed against a host-emulated member ({@link EmuMember}, ca1 cert): the flow of
+     * {@code EmuMemberFlowTest} run on card A, n = 10. Each EXPORT sample makes the member a fresh
+     * offer and decrypts the released record (correctness, not only timing); each IMPORT sample
+     * re-offers the card, ships a sealed payload and restores BLANK.
+     */
     @Test
     @Order(5)
+    void transferTimings() throws Exception {
+        Fixture.require();
+        // EXPORT: card A LOADED with members {A, M}; CREATE leaves this session verified (§9.4)
+        EmuMember m = new EmuMember();
+        Fixture.ensureBlank();
+        Session s = Fixture.open();
+        byte[] create = new byte[96 + 16];
+        System.arraycopy(Vecs.accessHash(), 0, create, 0, 32);
+        System.arraycopy(Vecs.seed(), 0, create, 32, 64);
+        System.arraycopy(m.cardId, 0, create, 96, 16);
+        assertEquals(0x9000, Fixture.cmd(s, 0x21, 1, 0, create).sw(), "CREATE with member M");
+        Fixture.ensureFactoryField(Fixture.Life.LOADED);
+        byte[] cardA = Fixture.cardA();
+        byte[] cardCert = Fixture.identity();
+        for (int i = 0; i < TRANSFER_RUNS; i++) {
+            byte[] offer = m.newOffer(); // a fresh LK_T ‖ sig_T per sample
+            RealCard.Timed t = timedFull(s.wrap(0x41, 0, 0, Transfer.export0(m.cert, offer)));
+            sample("EXPORT P1=0", t.nanos());
+            Response e0 = s.unwrap(t.rapdu());
+            assertEquals(0x9000, e0.sw(), "EXPORT P1=0");
+            Transfer.ExportHead head =
+                    Transfer.decodeExportHead(e0.data(), cardCert, m.cert, m.lk());
+            t = timedFull(s.wrap(0x41, 1, 0, Transfer.export1(Vecs.accessHashNew())));
+            sample("EXPORT P1=1", t.nanos());
+            Response e1 = s.unwrap(t.rapdu());
+            assertEquals(0x9000, e1.sw(), "EXPORT P1=1");
+            // the host as M opens the record: it must carry the seed card A was created with
+            byte[] transcript = EmuMember.transcript(cardA, m.a, m.lk(), head.e());
+            byte[] payload = EmuMember.unsealRecord(m.z(head.e()), transcript, e1.data());
+            assertNotNull(payload, "emulated member cannot open the export record");
+            assertArrayEquals(Vecs.seed(), Arrays.copyOfRange(payload, 1, 65), "exported seed");
+            assertArrayEquals(
+                    Vecs.accessHashNew(),
+                    Arrays.copyOfRange(payload, 65, 97),
+                    "accessHash_T in the payload");
+        }
+        s.close();
+
+        // IMPORT: card A BLANK; the host plays the source S of a set {S, A} (§11.3)
+        EmuMember src = new EmuMember();
+        for (int i = 0; i < TRANSFER_RUNS; i++) {
+            Fixture.ensureBlank();
+            s = Fixture.open();
+            Response offer = Fixture.cmd(s, 0x40, 0, 0, new byte[0]);
+            assertEquals(0x9000, offer.sw(), "OFFER");
+            byte[] lk = Arrays.copyOf(offer.data(), 65);
+            byte[][] headE = src.importHead(cardA, lk); // {cert_S ‖ E ‖ sig_S, e}
+            RealCard.Timed t = timedFull(s.wrap(0x42, 0, 0, headE[0]));
+            sample("IMPORT P1=0", t.nanos());
+            assertEquals(0x9000, s.unwrap(t.rapdu()).sw(), "IMPORT P1=0");
+            byte[] z = EmuMember.ecdhX(new BigInteger(1, headE[1]), lk);
+            byte[] m0 =
+                    EmuMember.transcript(src.a, cardA, lk, Arrays.copyOfRange(headE[0], 97, 162));
+            byte[] payload =
+                    EmuMember.payload(
+                            0x02, Vecs.seed(), Vecs.accessHashNew(), src.cardId, Ids.cardId(cardA));
+            byte[] record = EmuMember.sealRecord(z, m0, payload);
+            t = timedFull(s.wrap(0x42, 1, 0, Transfer.import1(record)));
+            sample("IMPORT P1=1", t.nanos());
+            Response i1 = s.unwrap(t.rapdu());
+            assertEquals(0x9000, i1.sw(), "IMPORT P1=1");
+            WalletInfo w = WalletInfo.parse(i1.data());
+            assertArrayEquals(
+                    Vecs.seedMasterPublicKey(), w.masterPublicKey(), "imported master key");
+            // untimed: VERIFY with the transferred hash proves the install, ERASE restores
+            // BLANK for the next sample
+            assertEquals(
+                    0x9000,
+                    Fixture.cmd(s, 0x22, 0, 0, Vecs.accessHashNew()).sw(),
+                    "VERIFY with accessHash_T");
+            Fixture.erase(s);
+            s.close();
+        }
+    }
+
+    @Test
+    @Order(6)
     void selectTimings() throws Exception {
         Fixture.require();
         Fixture.ensureSelected();
@@ -377,7 +469,7 @@ final class TimingRealCardTest {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     void writeReportAndAssertBounds() throws Exception {
         Fixture.require();
         StringBuilder md =
