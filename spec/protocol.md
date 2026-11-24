@@ -121,8 +121,9 @@ NXP JCOP 4 P71, J3R180 class):
 The silicon MUST additionally behave as follows. Each item is an admission test run on every
 silicon batch before personalisation (`docs/architecture.md` §10). A batch that fails any item is
 not used: there is no fallback implementation and no protocol variant. Items 1–5 and 7 passed on
-the development card (JCOP 4 P71, CPLC IC type `D321`). For item 9 the iteration cost was
-measured on the same card (2.37 ms per 32-byte SHA-256), which gives 965 ms per `WAIT`; the full
+development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPLC IC type
+`D321`). For item 9 the iteration cost was
+measured on the same card (2.39 ms per 32-byte SHA-256), which gives 969 ms per `WAIT`; the full
 command is timed by the real-card suite.
 
 1. `ALG_RSA_NOPAD` with a `LENGTH_RSA_512` private key accepts a 64-byte modulus whose value is
@@ -416,8 +417,9 @@ The inner status word is the result of the command.
 A session is torn down by: `SELECT` of the wallet applet; `OPEN`; a failure in §8.3 steps 2–5;
 counter exhaustion; any inner `6F00` (after its response record is sent); card reset or loss of
 the field. Teardown wipes, in this order: the `verified` flag, the decrypted seed, the
-derivation caches, the Ed25519 stream, the pending export and import states, the `waited` count,
-the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory. The applet wipes them explicitly in `select()`
+derivation caches, the Ed25519 stream, the pending export and import states (their transfer keys
+`K_te` and `K_tm` overwritten with fresh random values, never a constant — §16.2 item 4), the
+`waited` count, the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory. The applet wipes them explicitly in `select()`
 and in `OPEN`, and again in `deselect()` as defence in depth; no property depends on `deselect()`
 being called (a loss of the field calls nothing, and the NDEF applet shares the wallet's context,
 so selecting it does not clear `CLEAR_ON_DESELECT` memory). The domain parameters of a transient
@@ -579,6 +581,10 @@ Data: `accessHash(32)` (`Lc = 32`, else `6700`).
 The candidate is first used in step 7, after T-FAIL is committed and read back. A power loss
 before T-FAIL leaves no comparison performed; after it, the failure is counted. If `f₁ = L`
 and power is lost before step 9 completes, the next `VERIFY` erases at step 2 without comparing.
+This holds for a matching candidate too: with `f_a = L − 1` (`STATUS` reports `tries = 1`) T-FAIL
+is committed before the comparison, so a power loss after T-FAIL and before T-OK leaves `f = L`
+and the next `VERIFY` erases the wallet although the code was right. Hosts therefore ask the user
+to keep the card in the field for the whole duration of a `VERIFY` answered with `tries = 1`.
 A fault that skips the write or the commit of T-FAIL is caught at step 6 because the value must
 equal `f_b + 1` and the transaction must be closed (JCRE 3.2 §7.2: an uncommitted update reads
 back as its new value). The value written comes from `f_a` and the value expected from the
@@ -637,8 +643,9 @@ RFC 8032 challenge hash; hosts MUST send `encode(R) ‖ encode(A) ‖ M`, where 
 encoding of the returned `W(R)` and `encode(A)` that of `PUBLIC_KEY` for `path` (§10.4). The card
 does not parse the stream; any other stream yields a signature that is invalid under the card's
 key (§12.3). The host forms the signature `encode(R) ‖ le32(S)`. The message has no length limit.
-Note: chunks above 236 bytes cannot be carried by a command record (§8.3); the card checks the
-bound anyway. Algorithm: §12.3.
+Note: a command record carries at most 236 bytes of chunk (§8.3: `Lc ≤ 248` gives `|ct| ≤ 240`,
+hence `data ≤ 236`), so no longer chunk can reach the card and the card does not check an upper
+bound. Algorithm: §12.3.
 
 ### 9.12 OFFER (`0x40`)
 
@@ -734,7 +741,7 @@ Data: empty (`Lc = 0`, else `6700`). Allowed in `LOADED`; no access code is requ
 `waited ← min(waited + 1, W)`. No persistent write. Response: empty. `waited` is session state
 (cleared by teardown, §8.5) and is consumed by `VERIFY` (§9.5 step 4). A host that sees
 `tries ≤ L − F` in `STATUS` sends `W` `WAIT` commands before `VERIFY`; on the baseline chip one
-`WAIT` takes about 1 s (965 ms on the development card, §16.6; §3 item 9 bounds it to
+`WAIT` takes about 1 s (969 ms on the development card, §16.6; §3 item 9 bounds it to
 900–1100 ms), so such an attempt needs about 15 s of continuous contact.
 
 ## 10. Key storage and derivation
@@ -1086,13 +1093,25 @@ belongs to a past transfer or ciphertext (§3 item 7).
    T-OK, decryption and `verified` are reachable only through two independent branches, each
    comparing a coded result with `CHECK_OK`, whose fall-through path is the failure path; T-OK
    additionally requires the fingerprint check of §9.5 step 8.
-4. Each of the following checks is evaluated twice, with coded results, immediately before the
-   effect it guards: the `life` check of `PERSONALIZE`, `CREATE`, `OFFER`, `IMPORT` and `ERASE`;
-   `verified` before each signature, public key, `CHANGE` effect, `ERASE` effect and export
-   payload; the certificate and membership checks of `EXPORT`; the equality checks of `IMPORT` in
-   `LOADED`; the gates of `VERIFY` steps 2 and 6 (in step 2 the two evaluations use the two
-   independent reads `f_a` and `f_b`). The wait check of `VERIFY` step 3 is evaluated
+4. Each of the following checks is evaluated twice, with coded results, the second evaluation
+   immediately before the effect it guards: the `life` check of `PERSONALIZE`, `CREATE`,
+   `OFFER`, `IMPORT` and `ERASE`; `verified` before each signature, public key, `CHANGE` effect,
+   `ERASE` effect and export payload; the equality checks of `IMPORT` in `LOADED`; the gates of
+   `VERIFY` steps 2 and 6 (in step 2 the two evaluations use the two independent reads `f_a` and
+   `f_b`). The wait check of `VERIFY` step 3 is evaluated
    once: skipping it saves one wait and cannot raise the number of comparisons above `L`.
+   The checks that gate seed export, the peer-key slot write and seed import are evaluated twice
+   by independent recomputation — the second evaluation repeats the verification, MAC
+   computation, membership lookup or state read; it never re-tests a stored result: in `EXPORT`
+   `P1 = 0x00` the certificate, membership and `sig_T` checks, recomputed before `sig_S`, the
+   pending export keys and `E` are produced; in `EXPORT` `P1 = 0x01` the pending-export check,
+   before the payload is encrypted; in `IMPORT` `P1 = 0x00` the certificate and — in `LOADED` —
+   the membership check, before the peer-key slot write, and `sig_S`, before the pending import
+   keys are derived; in `IMPORT` `P1 = 0x01` the MAC check, before the payload is decrypted. A
+   signature verification's coded result is derived from the engine's boolean through two
+   independent conditionals, so one skipped branch cannot yield the success value. Ending a
+   pending state (§9.2, §8.5) overwrites `K_te` and `K_tm` with fresh random values, never a
+   constant, so an output produced past a bypassed pending check is under keys no one holds.
 5. Every signature is self-verified before output (§12): ECDSA with `verifyPreComputedHash`
    under the leaf public key computed by public derivation (`K_par + IL·G`) for a non-hardened
    leaf, or `k_leaf·G` for a hardened leaf; BIP-340 per BIP-340 `Verify` with
@@ -1118,7 +1137,9 @@ belongs to a past transfer or ciphertext (§3 item 7).
    (transient arrays).
 2. Every transient secret is wiped after its last use in the command and on teardown, on every
    path including exceptions.
-3. After every `SESSION` the APDU buffer is overwritten where it held inner plaintext.
+3. After every `SESSION` the APDU buffer is overwritten where it held inner plaintext — including
+   when the command ends with an exception, where the whole buffer is wiped before the status word
+   is returned.
 4. Unexpected exceptions map to `6F00`; native exception reason codes are never returned.
 
 ### 16.4 Constant time
@@ -1144,43 +1165,48 @@ cleared together with its value (on the development card on every deselection, i
 re-`SELECT` of the same applet, and on reset); the applet loads them in `select()`, before any
 use (§8.5). Each initialisation step of §4.3 MUST complete within
 500 ms; on the baseline chip every command MUST complete within
-1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Measured on the
-development card (JCOP 4 P71, J3R351, contactless, host-side round trip including transport;
-median / p95 ms, n):
+1500 ms. Hosts MUST set the reader transceive timeout to at least 5000 ms. Measured on
+development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, contactless,
+host-side round trip including transport; median / p95 ms, n):
 
 | Command | median | p95 | n |
 | --- | --- | --- | --- |
-| `SELECT` | 28 | 28 | 20 |
+| `SELECT` | 31 | 31 | 20 |
 | `GET_IDENTITY` | 29 | 29 | 1 |
-| initialisation step (max) | 148 | 148 | 7 |
+| initialisation step (max) | 164 | 164 | 7 |
 | `PERSONALIZE` | 609 | 609 | 1 |
-| `OPEN` | 315 | 315 | 20 |
+| `OPEN` | 316 | 317 | 20 |
 | `STATUS` | 33 | 33 | 20 |
 | `VERIFY` right | 214 | 215 | 20 |
-| `VERIFY` wrong | 79 | 80 | 20 |
-| `WAIT` | 970 | 970 | 20 |
+| `VERIFY` wrong | 80 | 80 | 20 |
+| `WAIT` | 969 | 969 | 20 |
 | `CREATE` `P1 = 0` | 207 | 207 | 20 |
-| `CREATE` `P1 = 1` | 202 | 202 | 20 |
+| `CREATE` `P1 = 1` | 202 | 203 | 20 |
 | `ERASE` | 54 | 54 | 40 |
 | `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 413 | 20 |
 | `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
 | `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
-| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 151 | 20 |
-| `SIGN_ECDSA`, depth 5, cold | 604 | 606 | 20 |
-| `SIGN_ECDSA`, depth 5, warm | 315 | 318 | 20 |
-| `SIGN_BIP340` (tweak), cold | 1060 | 1060 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 152 | 20 |
+| `SIGN_ECDSA`, depth 5, cold | 604 | 607 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 316 | 318 | 20 |
+| `SIGN_BIP340` (tweak), cold | 1060 | 1061 | 20 |
 | `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
-| `SIGN_ED25519` begin, cold | 498 | 498 | 60 |
+| `SIGN_ED25519` begin, cold | 498 | 499 | 60 |
 | `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
-| `SIGN_ED25519` finish, cold | 668 | 672 | 60 |
+| `SIGN_ED25519` finish, cold | 670 | 673 | 60 |
 | `OFFER` first | 216 | 216 | 1 |
 | `OFFER` valid | 163 | 163 | 20 |
+| `EXPORT` `P1 = 0x00` | 818 | 821 | 10 |
+| `EXPORT` `P1 = 0x01` | 61 | 61 | 10 |
+| `IMPORT` `P1 = 0x00` | 833 | 837 | 10 |
+| `IMPORT` `P1 = 0x01` | 254 | 255 | 10 |
 
 The slowest command (`SIGN_BIP340` with a tweak, cold) has a margin of 1.4× to the limit;
 `WAIT` 1.5× (1.1× at the 1100 ms upper bound of §3 item 9). A command record costs about
 33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
-⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,395 ms cold
-(498 + 5 × 46 + 668). `docs/architecture.md` §10 lists the real-card
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,396 ms cold
+(498 + 5 × 46 + 670). `EXPORT`/`IMPORT` are timed against a member emulated by the host
+— the two-card flow on silicon is not run. `docs/architecture.md` §10 lists the real-card
 timing suite.
 
 ### 16.7 Randomness

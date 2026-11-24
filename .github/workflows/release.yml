@@ -1,15 +1,23 @@
-# Before tagging, the real-card gate of docs/architecture.md §10 MUST have passed on
-# this commit: install the production CAP on card A, then OPEN across three select
-# epochs and a power cycle (InstallRealCardTest). CI cannot run it; record the result
-# in the release notes.
+# Before tagging, a real-card record for the CAP this tag produces MUST be committed
+# under realcard/<cap-sha256>.txt (the realCardRecord task writes it after a passing
+# ./gradlew :tests:realCard -PrealCard=<reader> run); the release job refuses a tag
+# whose CAP has no passing record.
 name: Release
 
 on:
   push:
     tags: ["v*"]
 
+permissions: {}
+
 jobs:
+  gate:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   release:
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -37,12 +45,16 @@ jobs:
           version=$(sed -n 's/^version=//p' gradle.properties)
           echo "version=$version tag=$GITHUB_REF_NAME"
           [[ "$GITHUB_REF_NAME" == "v$version" || "$GITHUB_REF_NAME" == "v$version-"* ]]
-      - name: Build and test
-        run: ./gradlew build --no-build-cache
-      - name: Vector generators agree
-        run: spec/vectors/gen/check.sh
       - name: Distributables
-        run: ./gradlew dist --no-build-cache
+        run: ./gradlew dist --no-build-cache -Porg.gradle.java.installations.auto-download=false
+      - name: Real-card evidence for this CAP
+        run: |
+          cap=$(sha256sum build/dist/qntx-card.cap | cut -d' ' -f1)
+          record="realcard/$cap.txt"
+          test -f "$record" || { echo "::error::no committed real-card record $record"; exit 1; }
+          grep -qx "cap $cap" "$record"
+          grep -qx "failed 0" "$record"
+          grep -qx "PASS org.qntx.card.real.InstallRealCardTest" "$record"
       - name: Reproducible CAP
         run: |
           ./gradlew :applet:cap --rerun-tasks --no-build-cache
@@ -65,6 +77,9 @@ jobs:
           - \`vectors.zip\` — the spec/vectors test vectors with their licenses
           - \`qntx-card-<version>.zip\` — the qntx-card provisioning tool
           - \`qntx-card.cdx.json\` — CycloneDX SBOM of everything released
+
+          Real-card evidence: \`realcard/$cap.txt\` records the suite's passing run of this
+          CAP on a development card (InstallRealCardTest included).
 
           Build provenance is attested; verify an artifact with:
 

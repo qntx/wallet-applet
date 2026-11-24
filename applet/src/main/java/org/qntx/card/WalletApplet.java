@@ -89,7 +89,11 @@ public final class WalletApplet extends Applet {
     /**
      * Outer dispatch in the order of protocol.md §9.1. Handlers write their response at buffer
      * offset 0 and return its length; scratch is wiped before every response or error so no command
-     * residue leaves the card (§8.1, §16.3 item 3).
+     * residue leaves the card (§8.1, §16.3 item 3). An exceptional exit also wipes the whole APDU
+     * buffer: an exception escaping {@link #session} — e.g. from {@link Session#wrap} — would
+     * otherwise leave the decrypted inner command (CREATE {@code P1 = 0x01}'s seed, IMPORT {@code
+     * P1 = 0x01}'s payload) at {@code OFFSET_CDATA}, and a status-word-only answer needs no buffer
+     * content (§16.3 item 3).
      */
     public void process(APDU apdu) {
         if (selectingApplet()) {
@@ -99,6 +103,7 @@ public final class WalletApplet extends Applet {
         try {
             len = dispatch(apdu);
         } catch (ISOException e) {
+            wipeBuffer(apdu);
             mem.wipeScratch();
             if (e.getReason() == Const.SW_FAULT) {
                 session.teardown();
@@ -106,6 +111,7 @@ public final class WalletApplet extends Applet {
             throw e;
         } catch (Exception e) {
             // §16.3 item 4: unexpected exceptions map to 6F00, reason codes never escape
+            wipeBuffer(apdu);
             mem.wipeScratch();
             session.teardown();
             ISOException.throwIt(Const.SW_FAULT);
@@ -113,6 +119,15 @@ public final class WalletApplet extends Applet {
         }
         mem.wipeScratch();
         apdu.setOutgoingAndSend((short) 0, len);
+    }
+
+    /**
+     * Wipes the whole APDU buffer on an exceptional exit (§16.3 item 3): an error answer is a
+     * status word only, so no response content is lost.
+     */
+    private static void wipeBuffer(APDU apdu) {
+        byte[] buf = apdu.getBuffer();
+        Bytes.wipe(buf, (short) 0, (short) buf.length);
     }
 
     /** The §9.1 outer table: CLA, the §4.3 init gate, reception, then the INS row's checks. */
@@ -416,8 +431,8 @@ public final class WalletApplet extends Applet {
                 } else if (dataLen < 1) {
                     ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
                 }
-                // no upper bound to check: the record layer never delivers more
-                // than the 236-byte maximum a chunk or tail may carry
+                // no upper bound to check: §8.3 (Lc ≤ 248) bounds a record's data at
+                // 236 bytes, so no longer chunk can reach the card (§9.11)
                 return;
             default:
                 // checkLength runs only for §9.2-table INS values; the row lookup and

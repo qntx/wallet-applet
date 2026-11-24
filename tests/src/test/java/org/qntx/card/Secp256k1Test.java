@@ -12,6 +12,8 @@ import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import javacard.framework.ISOException;
+import javacard.security.ECPublicKey;
+import javacard.security.KeyBuilder;
 import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.crypto.signers.ECDSASigner;
@@ -150,6 +152,40 @@ final class Secp256k1Test {
                 Math.max(0, 32 - b.length),
                 Math.min(32, b.length));
         return out;
+    }
+
+    /**
+     * {@link Secp256k1#verifyHash} returns exactly the coded results: {@code CHECK_OK} on a valid
+     * signature, {@code CHECK_FAIL} on an invalid one, {@code CHECK_MALFORMED} on an out-of-range
+     * scalar. Exact values — the two-conditional derivation must not let one skipped branch pass a
+     * {@code FAIL ^ CHECK_STEP_i} off as a result (§16.2 item 4).
+     */
+    @Test
+    void verifyHashReturnsExactCodedResults() {
+        Secp256k1 s = secp();
+        ECPublicKey pub =
+                (ECPublicKey)
+                        KeyBuilder.buildKey(
+                                KeyBuilder.TYPE_EC_FP_PUBLIC, KeyBuilder.LENGTH_EC_FP_256, false);
+        Secp256k1.setDomain(pub);
+        BigInteger d = new BigInteger("7");
+        byte[] w = Crypto.publicKey(d);
+        pub.setW(w, (short) 0, (short) w.length);
+        byte[] hash = new byte[32];
+        hash[0] = 1;
+        byte[] rs = Crypto.sign(d, hash);
+        assertEquals(Const.CHECK_OK, s.verifyHash(pub, hash, (short) 0, rs, (short) 0), "valid");
+        rs[63] ^= 0x01;
+        assertEquals(
+                Const.CHECK_FAIL, s.verifyHash(pub, hash, (short) 0, rs, (short) 0), "invalid");
+        byte[] bad = new byte[64];
+        byte[] n = fixed(Crypto.N);
+        System.arraycopy(n, 0, bad, 0, 32);
+        bad[63] = 1;
+        assertEquals(
+                Const.CHECK_MALFORMED,
+                s.verifyHash(pub, hash, (short) 0, bad, (short) 0),
+                "r = n out of range");
     }
 
     @Test

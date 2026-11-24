@@ -4,6 +4,7 @@ package org.qntx.card;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.util.Arrays;
 import javacard.security.AESKey;
@@ -225,10 +226,16 @@ final class TransferCommandTest {
                 Const.PENDING_IMPORT,
                 (short) (((words[6] & 0xFF) << 8) | (words[7] & 0xFF)),
                 "pending import armed");
+        // endPending overwrites the pending keys with fresh random values, never a
+        // constant (§16.2 item 4)
+        byte[] kTe = aesKey(applet, "kTe");
+        byte[] kTm = aesKey(applet, "kTm");
         assertEquals(0x9000, t.inner(INS_STATUS, 0, new byte[0]).sw());
         assertEquals(0, words[6] | words[7], "STATUS ended the pending import");
-        assertArrayEquals(new byte[16], aesKey(applet, "kTe"), "kTe wiped");
-        assertArrayEquals(new byte[16], aesKey(applet, "kTm"), "kTm wiped");
+        assertFalse(Arrays.equals(kTe, aesKey(applet, "kTe")), "kTe overwritten");
+        assertFalse(Arrays.equals(kTm, aesKey(applet, "kTm")), "kTm overwritten");
+        assertFalse(Arrays.equals(new byte[16], aesKey(applet, "kTe")), "kTe not a constant");
+        assertFalse(Arrays.equals(new byte[16], aesKey(applet, "kTm")), "kTm not a constant");
         assertArrayEquals(
                 new byte[16], (byte[]) Internals.memField(applet, "sender"), "sender wiped");
     }
@@ -251,10 +258,14 @@ final class TransferCommandTest {
                 Const.PENDING_EXPORT,
                 (short) (((words[6] & 0xFF) << 8) | (words[7] & 0xFF)),
                 "pending export armed");
+        byte[] kTe = aesKey(applet, "kTe");
+        byte[] kTm = aesKey(applet, "kTm");
         assertEquals(0x9000, s.inner(INS_STATUS, 0, new byte[0]).sw());
         assertEquals(0, words[6] | words[7], "STATUS ended the pending export");
-        assertArrayEquals(new byte[16], aesKey(applet, "kTe"), "kTe wiped");
-        assertArrayEquals(new byte[16], aesKey(applet, "kTm"), "kTm wiped");
+        assertFalse(Arrays.equals(kTe, aesKey(applet, "kTe")), "kTe overwritten");
+        assertFalse(Arrays.equals(kTm, aesKey(applet, "kTm")), "kTm overwritten");
+        assertFalse(Arrays.equals(new byte[16], aesKey(applet, "kTe")), "kTe not a constant");
+        assertFalse(Arrays.equals(new byte[16], aesKey(applet, "kTm")), "kTm not a constant");
         assertArrayEquals(
                 new byte[16], (byte[]) Internals.memField(applet, "sender"), "sender wiped");
     }

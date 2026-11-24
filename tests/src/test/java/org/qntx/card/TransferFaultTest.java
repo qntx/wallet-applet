@@ -18,11 +18,12 @@ import org.qntx.card.tests.Vecs;
 
 /**
  * Fault mutants of the transfer guards (architecture §9 T3, §16.2 item 4; h2 brief item 11): {@link
- * Fault#arm}/{@link Fault#armSkip} force every single evaluation of the certificate and membership
- * results in EXPORT0, of the certificate and membership guarding the peer-slot write in IMPORT0, of
- * the stored MAC, the life guard and the three LOADED equality checks in IMPORT1, of the verified
- * guard in EXPORT1 and of the life guard and commit read-back of OFFER. Each forced evaluation must
- * end in {@code 6F00}/{@code 6A80} — never a T-INSTALL, never a payload, never a committed T-OFFER.
+ * Fault#arm}/{@link Fault#armSkip} force every single evaluation of the certificate, membership and
+ * offer-signature recomputations in EXPORT0, of the certificate, membership and {@code sig_S}
+ * recomputations guarding the peer-slot write in IMPORT0, of the MAC recomputation, the life guard
+ * and the three LOADED equality checks in IMPORT1, of the verified and pending guards in EXPORT1
+ * and of the life guard and commit read-back of OFFER. Each forced evaluation must end in {@code
+ * 6F00}/{@code 6A80} — never a T-INSTALL, never a payload, never a committed T-OFFER.
  */
 final class TransferFaultTest {
     private static final int INS_CREATE = 0x21;
@@ -138,13 +139,20 @@ final class TransferFaultTest {
         Side target = new Side();
         Side source = loaded(target);
         byte[] data = concat(target.cert, target.offer());
-        assertEquals(1, measure(source, INS_EXPORT, 0, data, "Identity.verifyCert"));
-        try {
-            Fault.arm("Identity.verifyCert", 1, Const.CHECK_FAIL);
-            assertKilled(source.inner(INS_EXPORT, 0, data).sw(), "cert forced FAIL");
-            assertEquals(0, pending(source), "no pending export");
-        } finally {
-            Fault.reset();
+        // the data check and its recomputation before signHash (§16.2 item 4)
+        int calls = measure(source, INS_EXPORT, 0, data, "Identity.verifyCert");
+        assertEquals(2, calls, "verifyCert evaluations");
+        for (int i = 1; i <= calls; i++) {
+            try {
+                Fault.arm("Identity.verifyCert", i, Const.CHECK_FAIL);
+                assertKilled(source.inner(INS_EXPORT, 0, data).sw(), "cert eval " + i);
+                assertEquals(0, pending(source), "eval " + i + " left a pending export");
+            } finally {
+                Fault.reset();
+            }
+            // a 6F00 tore the session
+            source.reopen();
+            source.verify();
         }
     }
 
@@ -154,8 +162,8 @@ final class TransferFaultTest {
         Side source = loaded(target);
         byte[] data = concat(target.cert, target.offer());
         int calls = measure(source, INS_EXPORT, 0, data, "Transfer.memberSlot");
-        // the slot lookup once + its double recompute before the pending export
-        assertEquals(3, calls, "memberSlot evaluations");
+        // the slot lookup once + its recomputation before the pending export
+        assertEquals(2, calls, "memberSlot evaluations");
         for (int i = 1; i <= calls; i++) {
             try {
                 // force the wrong peer slot (the only other slot of a two-member wallet)
@@ -190,13 +198,18 @@ final class TransferFaultTest {
         Side source = new Side();
         Side target = loadedTarget(source);
         byte[] data = concat(source.cert, export(source, target)[0]);
-        assertEquals(1, measure(target, INS_IMPORT, 0, data, "Identity.verifyCert"));
-        try {
-            Fault.arm("Identity.verifyCert", 1, Const.CHECK_FAIL);
-            assertKilled(target.inner(INS_IMPORT, 0, data).sw(), "cert forced FAIL");
-            assertEquals(0, pending(target), "no pending import");
-        } finally {
-            Fault.reset();
+        // the data check and its recomputation before the peer-slot write (§16.2 item 4)
+        int calls = measure(target, INS_IMPORT, 0, data, "Identity.verifyCert");
+        assertEquals(2, calls, "verifyCert evaluations");
+        for (int i = 1; i <= calls; i++) {
+            try {
+                Fault.arm("Identity.verifyCert", i, Const.CHECK_FAIL);
+                assertKilled(target.inner(INS_IMPORT, 0, data).sw(), "cert eval " + i);
+                assertEquals(0, pending(target), "eval " + i + " left a pending import");
+            } finally {
+                Fault.reset();
+            }
+            target.reopen();
         }
     }
 
@@ -206,7 +219,7 @@ final class TransferFaultTest {
         Side target = loadedTarget(source);
         byte[] data = concat(source.cert, export(source, target)[0]);
         int calls = measure(target, INS_IMPORT, 0, data, "Transfer.memberSlot");
-        assertEquals(3, calls, "slot lookup + double recompute before the write");
+        assertEquals(2, calls, "slot lookup + recomputation before the write");
         for (int i = 1; i <= calls; i++) {
             try {
                 Fault.arm("Transfer.memberSlot", i, (short) 1);
@@ -235,7 +248,7 @@ final class TransferFaultTest {
         Side source = new Side();
         Side target = loadedTarget(source);
         byte[][] e = armImport(target, source);
-        // evals 1 and 2 are the §8.3 request-tag check; the stored-MAC eval is 3
+        // evals 1 and 2 are the §8.3 request-tag check; the first MAC eval is 3
         try {
             Fault.arm("Bytes.equal", 3, Const.CHECK_FAIL);
             assertKilled(target.inner(INS_IMPORT, 1, e[1]).sw(), "mac forced FAIL");
@@ -430,8 +443,9 @@ final class TransferFaultTest {
         byte[] data = concat(target.cert, target.offer());
         assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw());
         int calls = measure(source, INS_EXPORT, 1, Vecs.accessHashNew(), "Session.verified");
-        // the guarded double evaluation before the payload is output
-        assertTrue(calls >= 2, "verified evaluations " + calls);
+        // the dispatch gate plus the guarded double evaluation before the payload is
+        // output: M29 (the first in-handler check deleted) drops this to 2
+        assertEquals(3, calls, "verified evaluations");
         for (int i = 1; i <= calls; i++) {
             source.reopen();
             source.verify();
@@ -567,15 +581,15 @@ final class TransferFaultTest {
 
     @Test
     void import1DuplicateCheckForced() throws Exception {
-        // evals 1-3 of Bytes.equal are the record tag and the stored MAC; eval 4 is the
-        // first pairwise member comparison of a two-member payload — forcing it to OK is
-        // a duplicate, which must be 6A80, never an install
+        // evals 1-4 of Bytes.equal are the record tag and the two MAC evaluations; eval 5
+        // is the first pairwise member comparison of a two-member payload — forcing it to
+        // OK is a duplicate, which must be 6A80, never an install
         Side target = new Side();
         Side source = loaded(target);
         byte[][] e = export(source, target);
         assertEquals(0x9000, target.inner(INS_IMPORT, 0, concat(source.cert, e[0])).sw());
         try {
-            Fault.arm("Bytes.equal", 4, Const.CHECK_OK);
+            Fault.arm("Bytes.equal", 5, Const.CHECK_OK);
             assertKilled(target.inner(INS_IMPORT, 1, e[1]).sw(), "forced duplicate");
             assertEquals(0, pending(target), "pending import left");
         } finally {
@@ -599,19 +613,35 @@ final class TransferFaultTest {
     }
 
     @Test
-    void import1MacHeldForced() throws Exception {
-        // the stored MAC result twice through held(): each armable evaluation
+    void import1MacRecomputeForced() throws Exception {
+        // the tag check recomputed before decryption (§16.2 item 4): the first
+        // evaluation forced OK on a tampered tag must be caught by the second; the
+        // second forced FAIL on genuine data is a fault either way
         Side target = new Side();
         Side source = loaded(target);
         byte[][] e = armImport(target, source);
-        int calls = measure(target, INS_IMPORT, 1, e[1], "Transfer.held");
-        assertEquals(2, calls, "held evaluations of the stored MAC result");
+        int calls = measure(target, INS_IMPORT, 1, e[1], "Transfer.mac");
+        assertEquals(2, calls, "mac evaluations");
+        byte[] badTag = e[1].clone();
+        badTag[badTag.length - 1] ^= 0x01;
+        target.reopen();
+        armImport(target, source);
+        try {
+            Fault.arm("Transfer.mac", 1, Const.CHECK_OK);
+            assertEquals(
+                    0x6F00,
+                    target.inner(INS_IMPORT, 1, badTag).sw(),
+                    "first eval forced OK must be caught by the recomputation");
+            assertEquals(0, pending(target), "pending import left");
+        } finally {
+            Fault.reset();
+        }
         for (int i = 1; i <= calls; i++) {
             target.reopen();
             e = armImport(target, source);
             try {
-                Fault.arm("Transfer.held", i, Const.CHECK_FAIL);
-                assertKilled(target.inner(INS_IMPORT, 1, e[1]).sw(), "held eval " + i);
+                Fault.arm("Transfer.mac", i, Const.CHECK_FAIL);
+                assertKilled(target.inner(INS_IMPORT, 1, e[1]).sw(), "mac eval " + i);
                 assertEquals(0, pending(target), "eval " + i + " left a pending import");
             } finally {
                 Fault.reset();
@@ -620,16 +650,54 @@ final class TransferFaultTest {
     }
 
     @Test
-    void export0HeldForced() throws Exception {
+    void export0CertRecomputeForced() throws Exception {
+        // the certificate check recomputed before signHash (§16.2 item 4): the first
+        // evaluation forced OK on a tampered certificate must be caught by the second
         Side target = new Side();
         Side source = loaded(target);
         byte[] data = concat(target.cert, target.offer());
-        int calls = measure(source, INS_EXPORT, 0, data, "Transfer.held");
-        assertEquals(2, calls, "held evaluations of the stored certificate result");
+        byte[] badData = data.clone();
+        badData[96] ^= 0x01; // a certificate signature byte — verifyCert fails
+        try {
+            Fault.arm("Identity.verifyCert", 1, Const.CHECK_OK);
+            assertEquals(
+                    0x6F00,
+                    source.inner(INS_EXPORT, 0, badData).sw(),
+                    "first eval forced OK must be caught by the recomputation");
+            assertEquals(0, pending(source), "pending export left");
+        } finally {
+            Fault.reset();
+        }
+    }
+
+    @Test
+    void export0OfferSignatureForced() throws Exception {
+        // the sig_T check recomputed before signHash (§16.2 item 4): the first
+        // evaluation forced OK on a tampered offer signature must be caught by the
+        // second; the second forced FAIL on genuine data is a fault either way
+        Side target = new Side();
+        Side source = loaded(target);
+        byte[] data = concat(target.cert, target.offer());
+        int calls = measure(source, INS_EXPORT, 0, data, "Transfer.offerSignature");
+        assertEquals(2, calls, "offerSignature evaluations");
+        byte[] badData = data.clone();
+        badData[badData.length - 1] ^= 0x01; // a sig_T byte — the offer verify fails
+        try {
+            Fault.arm("Transfer.offerSignature", 1, Const.CHECK_OK);
+            assertEquals(
+                    0x6F00,
+                    source.inner(INS_EXPORT, 0, badData).sw(),
+                    "first eval forced OK must be caught by the recomputation");
+            assertEquals(0, pending(source), "pending export left");
+        } finally {
+            Fault.reset();
+        }
+        source.reopen();
+        source.verify();
         for (int i = 1; i <= calls; i++) {
             try {
-                Fault.arm("Transfer.held", i, Const.CHECK_FAIL);
-                assertKilled(source.inner(INS_EXPORT, 0, data).sw(), "held eval " + i);
+                Fault.arm("Transfer.offerSignature", i, Const.CHECK_FAIL);
+                assertKilled(source.inner(INS_EXPORT, 0, data).sw(), "offerSignature eval " + i);
                 assertEquals(0, pending(source), "eval " + i + " left a pending export");
             } finally {
                 Fault.reset();
@@ -640,21 +708,57 @@ final class TransferFaultTest {
     }
 
     @Test
-    void import0HeldForced() throws Exception {
+    void import0CertRecomputeForced() throws Exception {
+        // the certificate check recomputed before the peer-slot write (§16.2 item 4):
+        // the first evaluation forced OK on a tampered certificate must be caught by
+        // the second
         Side source = new Side();
         Side target = loadedTarget(source);
         byte[] data = concat(source.cert, export(source, target)[0]);
-        int calls = measure(target, INS_IMPORT, 0, data, "Transfer.held");
-        assertEquals(2, calls, "held evaluations of the stored certificate result");
-        for (int i = 1; i <= calls; i++) {
-            try {
-                Fault.arm("Transfer.held", i, Const.CHECK_FAIL);
-                assertKilled(target.inner(INS_IMPORT, 0, data).sw(), "held eval " + i);
-                assertEquals(0, pending(target), "eval " + i + " left a pending import");
-            } finally {
-                Fault.reset();
-            }
-            target.reopen();
+        byte[] badData = data.clone();
+        badData[96] ^= 0x01; // a certificate signature byte — verifyCert fails
+        try {
+            Fault.arm("Identity.verifyCert", 1, Const.CHECK_OK);
+            assertEquals(
+                    0x6F00,
+                    target.inner(INS_IMPORT, 0, badData).sw(),
+                    "first eval forced OK must be caught by the recomputation");
+            assertEquals(0, pending(target), "pending import left");
+        } finally {
+            Fault.reset();
+        }
+    }
+
+    @Test
+    void import0SignRecomputeForced() throws Exception {
+        // the sig_S check recomputed before the pending import keys are derived
+        // (§16.2 item 4): the first evaluation forced OK on a tampered sig_S must be
+        // caught by the second; the second forced FAIL on genuine data is a fault
+        Side source = new Side();
+        Side target = loadedTarget(source);
+        byte[] data = concat(source.cert, export(source, target)[0]);
+        int calls = measure(target, INS_IMPORT, 0, data, "Secp256k1.verifyHash");
+        // cert_S and its recomputation, sig_S and its recomputation
+        assertEquals(4, calls, "verifyHash evaluations");
+        byte[] badData = data.clone();
+        badData[badData.length - 1] ^= 0x01; // a sig_S byte — the sig_S verify fails
+        try {
+            Fault.arm("Secp256k1.verifyHash", 3, Const.CHECK_OK);
+            assertEquals(
+                    0x6F00,
+                    target.inner(INS_IMPORT, 0, badData).sw(),
+                    "first sig_S eval forced OK must be caught by the recomputation");
+            assertEquals(0, pending(target), "pending import left");
+        } finally {
+            Fault.reset();
+        }
+        target.reopen();
+        try {
+            Fault.arm("Secp256k1.verifyHash", 4, Const.CHECK_FAIL);
+            assertKilled(target.inner(INS_IMPORT, 0, data).sw(), "recomputed sig_S forced FAIL");
+            assertEquals(0, pending(target), "pending import left");
+        } finally {
+            Fault.reset();
         }
     }
 
@@ -721,33 +825,152 @@ final class TransferFaultTest {
         }
     }
 
+    /** The member count of {@code side}'s persistent members block {@code c ‖ ID₁ ‖ …}. */
+    private static int memberCount(Side side) {
+        return Internals.stateArray(side.card.applet(Spec.WALLET_AID))[State.OFF_MEMBERS] & 0xFF;
+    }
+
+    /**
+     * The index of {@code id} in {@code side}'s persistent members block — the loop position {@code
+     * memberSlot} compares {@code P_SELF} and {@code P_CAND} at.
+     */
+    private static int memberIndex(Side side, byte[] id) {
+        byte[] state = Internals.stateArray(side.card.applet(Spec.WALLET_AID));
+        for (int i = 0; i < (state[State.OFF_MEMBERS] & 0xFF); i++) {
+            boolean eq = true;
+            for (int j = 0; j < 16; j++) {
+                eq &= state[State.OFF_MEMBERS + 1 + 16 * i + j] == id[j];
+            }
+            if (eq) {
+                return i;
+            }
+        }
+        throw new AssertionError("id is not a member");
+    }
+
+    /**
+     * The {@code Bytes.equal} evaluation number of memberSlot call {@code nth}'s first member
+     * compare in {@code ins} {@code P1 = 00}: the call is armed to throw after its body ran, so the
+     * dry-run count through the abort is the last of its {@code 2c} compares. Ends the session —
+     * the caller reopens before the next run.
+     */
+    private static int memberSlotFirstEval(Side side, int ins, byte[] data, int nth, int c)
+            throws Exception {
+        try {
+            Fault.armThrow("Transfer.memberSlot", nth);
+            side.inner(ins, 0, data);
+            return Fault.calls("Bytes.equal") - 2 * c + 1;
+        } finally {
+            Fault.reset();
+        }
+    }
+
     @Test
     void memberSlotSelfForced() throws Exception {
-        // evals 1-2 of Bytes.equal are the record tag, 3 is the A != A self-check; per
-        // member i the self compare is 4+2i and the candidate compare 5+2i — a self left
-        // unfound or a self landing on the candidate position is a coded fault, 6F00
+        // the self compare at the candidate's member position in each memberSlot call
+        // of EXPORT P1=00, forced to CHECK_OK: self == found must fault (6F00), never
+        // return a slot. Every eval number is derived — the dry-run total covers the
+        // record tag, the A != A check, both memberSlot calls and the decompress and
+        // setPeer compares between them, so a reorder fails loudly
         Side target = new Side();
         Side source = loaded(target);
         byte[] data = concat(target.cert, target.offer());
+        assertEquals(
+                13,
+                measure(source, INS_EXPORT, 0, data, "Bytes.equal"),
+                "Bytes.equal evaluations of EXPORT P1=00");
+        int c = memberCount(source);
+        int self = memberIndex(source, Ids.cardId(source.a));
+        int cand = memberIndex(source, Ids.cardId(target.a));
+        int first = memberSlotFirstEval(source, INS_EXPORT, data, 1, c);
+        source.reopen();
+        source.verify();
         try {
-            Fault.arm("Bytes.equal", 4, Const.CHECK_FAIL);
-            Fault.arm("Bytes.equal", 6, Const.CHECK_FAIL);
+            // a self left unfound is a coded fault: the self compare at self's own
+            // position of memberSlot call 1 forced FAIL
+            Fault.arm("Bytes.equal", first + 2 * self, Const.CHECK_FAIL);
             assertEquals(0x6F00, source.inner(INS_EXPORT, 0, data).sw(), "self missing");
         } finally {
             Fault.reset();
         }
         source.reopen();
         source.verify();
+        int second = memberSlotFirstEval(source, INS_EXPORT, data, 2, c);
+        source.reopen();
+        source.verify();
         try {
-            // the self compare forced at the candidate's position in all three memberSlot
-            // calls (evals 6, 12, 16): self == found must fault, never return a slot
-            Fault.arm("Bytes.equal", 6, Const.CHECK_OK);
-            Fault.arm("Bytes.equal", 12, Const.CHECK_OK);
-            Fault.arm("Bytes.equal", 16, Const.CHECK_OK);
+            armSelfIsFound(first, second, self, cand);
             assertEquals(0x6F00, source.inner(INS_EXPORT, 0, data).sw(), "self is found");
         } finally {
             Fault.reset();
         }
+    }
+
+    /**
+     * Arms the {@code Bytes.equal} evaluations of both memberSlot calls so the loop ends with
+     * {@code self == found}: the self compare at the candidate's position and the candidate compare
+     * at self's, each forced CHECK_OK — the loop assigns on every match, so whichever position is
+     * compared last leaves the two on one index.
+     */
+    private static void armSelfIsFound(int first, int second, int self, int cand) {
+        Fault.arm("Bytes.equal", first + 2 * cand, Const.CHECK_OK);
+        Fault.arm("Bytes.equal", first + 2 * self + 1, Const.CHECK_OK);
+        Fault.arm("Bytes.equal", second + 2 * cand, Const.CHECK_OK);
+        Fault.arm("Bytes.equal", second + 2 * self + 1, Const.CHECK_OK);
+    }
+
+    @Test
+    void import0MemberSlotSelfForced() throws Exception {
+        // the same case on IMPORT P1=00 of a LOADED target — the imported members keep
+        // the payload order, so self need not precede the candidate
+        Side source = new Side();
+        Side target = loadedTarget(source);
+        byte[] data = concat(source.cert, export(source, target)[0]);
+        assertEquals(
+                14,
+                measure(target, INS_IMPORT, 0, data, "Bytes.equal"),
+                "Bytes.equal evaluations of IMPORT P1=00");
+        int c = memberCount(target);
+        int self = memberIndex(target, Ids.cardId(target.a));
+        int cand = memberIndex(target, Ids.cardId(source.a));
+        int first = memberSlotFirstEval(target, INS_IMPORT, data, 1, c);
+        target.reopen();
+        int second = memberSlotFirstEval(target, INS_IMPORT, data, 2, c);
+        target.reopen();
+        try {
+            armSelfIsFound(first, second, self, cand);
+            assertEquals(0x6F00, target.inner(INS_IMPORT, 0, data).sw(), "self is found");
+        } finally {
+            Fault.reset();
+        }
+    }
+
+    @Test
+    void export1PendingForced() throws Exception {
+        // the pending-export gate read once at the top and re-read before the payload
+        // is encrypted (§16.2 item 4): forcing either read to a wrong coded value must
+        // be refused — 6985 at the gate, 6F00 at the re-read
+        Side target = new Side();
+        Side source = loaded(target);
+        byte[] data = concat(target.cert, target.offer());
+        assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw());
+        int calls = measure(source, INS_EXPORT, 1, Vecs.accessHashNew(), "Session.pending");
+        assertEquals(2, calls, "pending evaluations");
+        for (int i = 1; i <= calls; i++) {
+            source.reopen();
+            source.verify();
+            assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw(), "re-arm " + i);
+            try {
+                Fault.arm("Session.pending", i, Const.PENDING_IMPORT);
+                int sw = source.inner(INS_EXPORT, 1, Vecs.accessHashNew()).sw();
+                assertNotEquals(0x9000, sw, "pending eval " + i + " must not output");
+                assertEquals(i == 1 ? 0x6985 : 0x6F00, sw, "pending eval " + i);
+            } finally {
+                Fault.reset();
+            }
+        }
+        // the 6F00 of eval 2 ended the pending export and tore the session
+        assertEquals(0, pending(source), "pending export left");
     }
 
     @Test

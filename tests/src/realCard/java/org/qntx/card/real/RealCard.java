@@ -143,8 +143,8 @@ public final class RealCard implements AutoCloseable {
     /**
      * The silicon identity beyond the ATR (architecture §10): the CPLC of the ISD must name the
      * card-A fabricator 4790 and IC type D321, and the ISD's JCOP IDENTIFY answer must carry the
-     * {@code J3R…} build string. Both land in {@code <out>/cplc.bin} / {@code identify.bin} (plus
-     * {@code gp-*.log}) for the batch record.
+     * {@code J3R} build string — card A reports {@code J3R3510236310400}. Both land in {@code
+     * <out>/cplc.bin} / {@code identify.bin} (plus {@code gp-*.log}) for the batch record.
      */
     public void verifySilicon() throws Exception {
         transmit(SELECT_ISD);
@@ -163,8 +163,9 @@ public final class RealCard implements AutoCloseable {
                             + String.format("%04X", icType)
                             + " is not card A silicon (4790/D321) — stopping");
         }
-        // JCOP IDENTIFY: GPPro's --info prints only the CPLC, so the build string (J3R…) is
-        // read straight from the ISD's DF28 answer; --info still lands in gp-*.log
+        // JCOP IDENTIFY: GPPro's --info prints only the CPLC, so the build string (card A
+        // reports J3R3510236310400) is read straight from the ISD's DF28 answer; --info still
+        // lands in gp-*.log
         gp("identify", "--info");
         byte[] identify = transmit(GET_DATA_IDENTIFY);
         Files.write(

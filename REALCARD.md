@@ -11,7 +11,7 @@ the first `gp --install`; a card that cannot be identified stops the whole run.
 
 | Card | ATR | CPLC fabricator | CPLC IC type | Silicon |
 | --- | --- | --- | --- | --- |
-| A | `3B8580018073C821100E` | `4790` | `D321` | JCOP4 P71 (`J3R…` build string) |
+| A | `3B8580018073C821100E` | `4790` | `D321` | J3R180 hardware reporting JCOP build `J3R3510236310400` |
 
 A card is accepted only when **all** of these hold:
 
@@ -19,8 +19,8 @@ A card is accepted only when **all** of these hold:
    every power cycle;
 2. the ISD's CPLC (`GET DATA 9F7F`) names fabricator `4790` and IC type `D321` — stored as
    `cplc.bin` for the batch record;
-3. the ISD's JCOP IDENTIFY answer (`GET DATA 00FE`, tag `DF28`) carries the build string
-   (`J3R…`) — stored as `identify.bin`.
+3. the ISD's JCOP IDENTIFY answer (`GET DATA 00FE`, tag `DF28`) carries the `J3R` build
+   string — card A reports `J3R3510236310400`; stored as `identify.bin`.
 
 ## Rules
 
