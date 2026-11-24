@@ -49,25 +49,6 @@ final class TimingRealCardTest {
     private static final int RUNS = 20;
     private static final int TRANSFER_RUNS = 10;
 
-    /** Predicted card time from §16.6, milliseconds; {@code null} where §16.6 gives none. */
-    private static final Map<String, Double> PREDICTED =
-            Map.ofEntries(
-                    Map.entry("INIT_STEP", 500.0),
-                    Map.entry("OPEN", 160.0),
-                    Map.entry("VERIFY right", 124.0),
-                    Map.entry("VERIFY wrong", 124.0),
-                    Map.entry("WAIT", 965.0),
-                    Map.entry("CREATE P1=0", 106.0),
-                    Map.entry("CREATE P1=1", 106.0),
-                    Map.entry("PUBLIC_KEY secp depth5 cold", 411.0),
-                    Map.entry("PUBLIC_KEY ed25519 depth5 cold", 217.0),
-                    Map.entry("SIGN_ECDSA depth5 cold", 411.0),
-                    Map.entry("SIGN_BIP340 untweaked cold", 724.0),
-                    Map.entry("SIGN_BIP340 tweak cold", 724.0),
-                    Map.entry("SIGN_ED25519 begin cold", 430.0),
-                    Map.entry("SIGN_ED25519 update", 21.0),
-                    Map.entry("SIGN_ED25519 finish cold", 486.0));
-
     private record Row(String name, List<Long> nanos) {
         double median() {
             long[] s = sorted();
@@ -474,14 +455,15 @@ final class TimingRealCardTest {
         Fixture.require();
         StringBuilder md =
                 new StringBuilder(
-                        "| command | n | min | median | p95 | max | predicted ms (§16.6) | ≤1500 |\n");
+                        "| command | n | min | median | p95 | max | bound ms | ≤bound |\n");
         md.append("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
         Map<String, Object> json = new LinkedHashMap<>();
         boolean waitChecked = false;
         for (Row r : ROWS) {
             // report-only rows: a streamed total is the host-side sum of several commands —
-            // §16.6's 1,500 ms bound is per command
+            // §16.6's bound is per command: 500 ms for a §4.3 step, 1,500 ms otherwise
             boolean bound = !r.name().contains(" total ");
+            int boundMs = r.name().equals("INIT_STEP") ? 500 : 1500;
             md.append(
                     String.format(
                             "| %s | %d | %.1f | %.1f | %.1f | %.1f | %s | %s |\n",
@@ -491,17 +473,14 @@ final class TimingRealCardTest {
                             r.median(),
                             r.p95(),
                             r.max(),
-                            PREDICTED.containsKey(r.name())
-                                    ? String.format("%.0f", PREDICTED.get(r.name()))
-                                    : "—",
-                            bound ? (r.max() <= 1500 ? "yes" : "NO") : "—"));
+                            bound ? String.valueOf(boundMs) : "—",
+                            bound ? (r.max() <= boundMs ? "yes" : "NO") : "—"));
             Map<String, Object> j = new LinkedHashMap<>();
             j.put("n", r.nanos().size());
             j.put("minMs", r.min());
             j.put("medianMs", r.median());
             j.put("p95Ms", r.p95());
             j.put("maxMs", r.max());
-            j.put("predictedMs", PREDICTED.get(r.name()));
             json.put(r.name(), j);
         }
         Files.writeString(

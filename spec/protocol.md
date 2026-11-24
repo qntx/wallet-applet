@@ -123,7 +123,7 @@ silicon batch before personalisation (`docs/architecture.md` §10). A batch that
 not used: there is no fallback implementation and no protocol variant. Items 1–5 and 7 passed on
 development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPLC IC type
 `D321`). For item 9 the iteration cost was
-measured on the same card (2.37 ms per 32-byte SHA-256), which gives 965 ms per `WAIT`; the full
+measured on the same card (2.39 ms per 32-byte SHA-256), which gives 969 ms per `WAIT`; the full
 command is timed by the real-card suite.
 
 1. `ALG_RSA_NOPAD` with a `LENGTH_RSA_512` private key accepts a 64-byte modulus whose value is
@@ -741,7 +741,7 @@ Data: empty (`Lc = 0`, else `6700`). Allowed in `LOADED`; no access code is requ
 `waited ← min(waited + 1, W)`. No persistent write. Response: empty. `waited` is session state
 (cleared by teardown, §8.5) and is consumed by `VERIFY` (§9.5 step 4). A host that sees
 `tries ≤ L − F` in `STATUS` sends `W` `WAIT` commands before `VERIFY`; on the baseline chip one
-`WAIT` takes about 1 s (965 ms on the development card, §16.6; §3 item 9 bounds it to
+`WAIT` takes about 1 s (969 ms on the development card, §16.6; §3 item 9 bounds it to
 900–1100 ms), so such an attempt needs about 15 s of continuous contact.
 
 ## 10. Key storage and derivation
@@ -1171,37 +1171,42 @@ host-side round trip including transport; median / p95 ms, n):
 
 | Command | median | p95 | n |
 | --- | --- | --- | --- |
-| `SELECT` | 28 | 28 | 20 |
+| `SELECT` | 31 | 31 | 20 |
 | `GET_IDENTITY` | 29 | 29 | 1 |
-| initialisation step (max) | 148 | 148 | 7 |
+| initialisation step (max) | 164 | 164 | 7 |
 | `PERSONALIZE` | 609 | 609 | 1 |
-| `OPEN` | 315 | 315 | 20 |
+| `OPEN` | 316 | 317 | 20 |
 | `STATUS` | 33 | 33 | 20 |
 | `VERIFY` right | 214 | 215 | 20 |
-| `VERIFY` wrong | 79 | 80 | 20 |
-| `WAIT` | 970 | 970 | 20 |
+| `VERIFY` wrong | 80 | 80 | 20 |
+| `WAIT` | 969 | 969 | 20 |
 | `CREATE` `P1 = 0` | 207 | 207 | 20 |
-| `CREATE` `P1 = 1` | 202 | 202 | 20 |
+| `CREATE` `P1 = 1` | 202 | 203 | 20 |
 | `ERASE` | 54 | 54 | 40 |
 | `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 413 | 20 |
 | `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
 | `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
-| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 151 | 20 |
-| `SIGN_ECDSA`, depth 5, cold | 604 | 606 | 20 |
-| `SIGN_ECDSA`, depth 5, warm | 315 | 318 | 20 |
-| `SIGN_BIP340` (tweak), cold | 1060 | 1060 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 152 | 20 |
+| `SIGN_ECDSA`, depth 5, cold | 604 | 607 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 316 | 318 | 20 |
+| `SIGN_BIP340` (tweak), cold | 1060 | 1061 | 20 |
 | `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
-| `SIGN_ED25519` begin, cold | 498 | 498 | 60 |
+| `SIGN_ED25519` begin, cold | 498 | 499 | 60 |
 | `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
-| `SIGN_ED25519` finish, cold | 668 | 672 | 60 |
+| `SIGN_ED25519` finish, cold | 670 | 673 | 60 |
 | `OFFER` first | 216 | 216 | 1 |
 | `OFFER` valid | 163 | 163 | 20 |
+| `EXPORT` `P1 = 0x00` | 818 | 821 | 10 |
+| `EXPORT` `P1 = 0x01` | 61 | 61 | 10 |
+| `IMPORT` `P1 = 0x00` | 833 | 837 | 10 |
+| `IMPORT` `P1 = 0x01` | 254 | 255 | 10 |
 
 The slowest command (`SIGN_BIP340` with a tweak, cold) has a margin of 1.4× to the limit;
 `WAIT` 1.5× (1.1× at the 1100 ms upper bound of §3 item 9). A command record costs about
 33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
-⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,395 ms cold
-(498 + 5 × 46 + 668). `docs/architecture.md` §10 lists the real-card
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,396 ms cold
+(498 + 5 × 46 + 670). `EXPORT`/`IMPORT` are timed against a member emulated by the host
+— the two-card flow on silicon is not run. `docs/architecture.md` §10 lists the real-card
 timing suite.
 
 ### 16.7 Randomness

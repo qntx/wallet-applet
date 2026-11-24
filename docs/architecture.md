@@ -163,8 +163,9 @@ per array page and per `setKey`/`setS`, 1,024 B per `setW`/`genKeyPair`, audit-i
 worst case is T-PERSO, T-CREATE, T-INSTALL, T-ERASE and T-OFFER at 2,048 B (40 %), T-CHANGE
 at 1,536 B, T-FAIL, T-OK and T-EDCTR at 1,024 B (measured by `CommitCapacityTest`). Card A's
 memprobe charges the transactions one card can reach no higher — T-PERSO 1,536, T-CREATE
-2,048, T-ERASE 2,048, T-OFFER 2,048, T-CHANGE 1,024, T-FAIL/T-OK/T-EDCTR 512 B
-(`memory.json`); T-INSTALL needs a second card and is not measured on silicon — the simulator
+2,048, T-ERASE 2,048, T-OFFER 1,536, T-CHANGE 1,024, T-FAIL/T-OK/T-EDCTR 512 B
+(`memory.json`); T-INSTALL is measured on silicon against a host-emulated member
+(`EmuMember`, journal charge 0 B) — the two-card flow itself is not run, so the simulator
 model is deliberately the conservative bound. There is no
 `clearKey` anywhere (§16.1). Initialisation (`protocol.md` §4.3) runs in `N = 7` steps, each a
 method on the class that owns the objects, dispatched by `WalletApplet` on `init`; `init`
@@ -515,7 +516,7 @@ card of `REALCARD.md`, never a production batch.
 | §3 item 8 — commit capacity | `AdmissionRealCardTest` (`platformEnginesAndCommitCapacity`), `MemoryRealCardTest` | probe `0x50` capscan reports `getMaxCommitCapacity`/`getUnusedCommitCapacity` (`commit-capacity.json`); memprobe `80 FE` reports `max − unused` before every commit of each named transaction — each ≤ 50 % (`memory.json`) |
 | §3 item 9 — WAIT unit | `TimingRealCardTest` | WAIT median of 20 runs ∈ [0.9, 1.1] s (`timing.json`, `timing.md`) |
 | §14.3 install, §4.3 init, §8.5 epochs | `InstallRealCardTest` | production CAP installs (registry = baseline + load file + instance); `GET_IDENTITY` polls return `6283` until `INIT_DONE` (bound 16, each ≤ 500 ms per §16.6, `init.json`); every other outer command answers `6283`; the memprobe twin reports the install journal charge ≤ 60 % of the commit capacity (`install-journal.json`); personalise, then `OPEN` ×3 across re-SELECTs and once across a power cycle; `qntx-card.cap` contains no `MemProbe` |
-| §16.6 command timing | `TimingRealCardTest` | every named command, 20 runs, host-clock median/max vs the B2 basis; every command ≤ 1,500 ms (`timing.json`, `timing.md`) |
+| §16.6 command timing | `TimingRealCardTest` | every named command, 20 runs (10 for the EXPORT/IMPORT rows, timed against `EmuMember`), host-clock median/max vs the B2 basis; every command ≤ 1,500 ms (`timing.json`, `timing.md`) |
 | platform primitives | `PrimitiveRealCardTest` | probe `0x60` (P1 = primitive, P2 = r): per-op cost = (t(r) − t(0)) / r over 20 medians at r ∈ {0, 4, 16} for the exact engine shapes the wallet uses — AES-CBC/CMAC, SHA-256/512, the RSA square, `setS`/`setW`/`setDomain`, `PLAIN_XY`/`PACE_GM`, precomputed-hash ECDSA, `nextBytes`, `arrayFillNonAtomic` and a `Bytes.equal`-style byte loop (`primitives.json`, `primitives.md`) |
 | §3 APDU `Lc = 248` | `SignRealCardTest` (`ed25519ChunkBoundaries`) | a 236-byte inner chunk is the largest record that fits `Lc = 248`; maximal updates + empty finish verify |
 | §9.5/§9.6 wallet | `WalletRealCardTest` | lifecycle and the failure-limit story (~110 real WAITs, run once); derivation vectors of `derivation.json` |
@@ -536,10 +537,11 @@ development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPL
 (`$A/audit-impl/evidence/card/functional.out`); admission must be repeated on each production
 batch. Multi-card flows are simulation-only while only one development card exists.
 
-Final card-A run (2026-11-23, CAP sha256 `a6e9d2f2…034417e5f`): the whole suite passed once,
-62 tests green, flows/tearing/NVM rows `unavailable` as designed; admission 6 ran the full
+Final card-A run (2026-11-24, CAP sha256 `c66a8b99…a70ef4dd`): the whole suite passed once,
+63 tests green, flows/tearing/NVM rows `unavailable` as designed; admission 6 ran the full
 §4.2 decision rule (80 × 10⁶ bits, every statistic's proportion and P-value_T inside bounds,
-`rng.json`); every timing row is inside its bound (`timing.md`, reproduced in the README);
+`rng.json`); every timing row is inside its bound (`timing.md`, reproduced in the README;
+EXPORT/IMPORT timed against a host-emulated member, `EmuMember`);
 the install journal charged 0 B and `CLEAR_ON_DESELECT` shows 32 % free after init
 (`install-journal.json`, `memory.json`).
 
