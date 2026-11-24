@@ -22,7 +22,11 @@ import javacardx.crypto.Cipher;
  * Decompressed peer points are staged in {@link Mem#W}[0..65) only until the {@code setW}
  * comparison — {@link ModArith} owns all of {@code W} during its operations. Pending export and
  * import keep {@code K_te ‖ K_tm} in {@link Mem#kTe}/{@link Mem#kTm} and the sender ID in {@link
- * Mem#sender}; {@link Session} wipes them when the pending state ends.
+ * Mem#sender}; {@link Session} overwrites the keys with fresh random values and wipes the sender
+ * when the pending state ends (§16.2 item 4). Every check that gates a seed transfer or the peer
+ * slot write is evaluated twice by independent recomputation — the second evaluation repeats the
+ * verification, MAC computation, membership lookup or state read immediately before the effect it
+ * guards; it never re-tests a stored result.
  */
 final class Transfer {
     /** {@link Mem#W} offset where a decompressed peer point is staged for {@code setW}. */
@@ -161,13 +165,15 @@ final class Transfer {
     /**
      * EXPORT {@code P1 = 0x00} (§9.13): authenticates the target's offer — the §9.13 data checks in
      * order, each {@code 6A80} — derives {@code E}, {@code Z}, the pending export keys and answers
-     * {@code E ‖ sig_S}.
+     * {@code E ‖ sig_S}. The certificate, membership and {@code sig_T} checks are recomputed after
+     * {@code hashM} (§16.2 item 4): {@link Identity#signHash} writes {@code sig_S} over the
+     * certificate's signature and {@code LK_T} in {@code buf}, so every re-verification must run
+     * before it.
      */
     short export0(byte[] buf, short dataOff) {
         byte[] h = mem.H;
         byte[] n = mem.N;
-        short cert = identity.verifyCert(buf, dataOff);
-        if (cert != Const.CHECK_OK) {
+        if (identity.verifyCert(buf, dataOff) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         identity.identity(h, H_A);
@@ -183,9 +189,7 @@ final class Transfer {
         if (buf[lkOff] != 0x04) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
-        hash(Const.LABEL_OFFER, buf, lkOff, Const.POINT_LEN, h, H_TH);
-        short sigOff = (short) (lkOff + Const.POINT_LEN);
-        if (secp.verifyHash(peer[slot], h, H_TH, buf, sigOff) != Const.CHECK_OK) {
+        if (offerSignature(buf, lkOff, slot, H_TH) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         secp.randomScalar(h, H_SCALAR);
@@ -200,15 +204,20 @@ final class Transfer {
             secp.wipeScalar();
         }
         hashM(h, H_A, buf, dataOff, buf, lkOff, n, N_POINT);
+        // the checks guarding the pending export keys and the E output, recomputed
+        // (§16.2 item 4); the offer hash goes to H_SCALAR — H_TH holds TH — which
+        // also overwrites the dead e
+        if (identity.verifyCert(buf, dataOff) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        if (memberSlot(buf, dataOff) != slot) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        if (offerSignature(buf, lkOff, slot, H_SCALAR) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         identity.signHash(h, H_TH, buf, Const.POINT_LEN);
         transferKeys(n, h);
-        // the checks guarding the pending export and the E output, recomputed (§16.2 item 4)
-        if (held(cert) != Const.CHECK_OK || held(cert) != Const.CHECK_OK) {
-            ISOException.throwIt(Const.SW_FAULT);
-        }
-        if (memberSlot(buf, dataOff) != slot || memberSlot(buf, dataOff) != slot) {
-            ISOException.throwIt(Const.SW_FAULT);
-        }
         Util.arrayCopy(n, N_POINT, buf, (short) 0, Const.POINT_LEN);
         session.setPending(Const.PENDING_EXPORT);
         return (short) (Const.POINT_LEN + 64);
@@ -241,6 +250,11 @@ final class Transfer {
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
+        // the pending-export check's second evaluation, immediately before the
+        // pending keys are used (§16.2 item 4)
+        if (session.pending() != Const.PENDING_EXPORT) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         mem.aesCbc.init(mem.kTe, Cipher.MODE_ENCRYPT, Const.ZEROS, (short) 0, (short) 16);
         mem.aesCbc.doFinal(h, (short) 0, ctLen, buf, (short) 0);
         mem.cmac.init(mem.kTm, Signature.MODE_SIGN);
@@ -260,8 +274,7 @@ final class Transfer {
         short life = state.life();
         byte[] h = mem.H;
         byte[] n = mem.N;
-        short cert = identity.verifyCert(buf, dataOff);
-        if (cert != Const.CHECK_OK) {
+        if (identity.verifyCert(buf, dataOff) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         identity.identity(h, H_A);
@@ -279,12 +292,12 @@ final class Transfer {
         if (secp.decompress(buf, dataOff, n, N_POINT) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
-        // the guards of the peer-slot write, immediately before the effect (§16.2 item 4)
-        if (held(cert) != Const.CHECK_OK || held(cert) != Const.CHECK_OK) {
+        // the guards of the peer-slot write, recomputed immediately before the
+        // effect (§16.2 item 4)
+        if (identity.verifyCert(buf, dataOff) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (life != Const.LIFE_BLANK
-                && (memberSlot(buf, dataOff) != slot || memberSlot(buf, dataOff) != slot)) {
+        if (life != Const.LIFE_BLANK && memberSlot(buf, dataOff) != slot) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         setPeer(slot, n, N_POINT);
@@ -300,6 +313,11 @@ final class Transfer {
         }
         if (secp.agree(linkPrivate, buf, eOff, n, N_Z) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+        }
+        // sig_S guards the pending import keys, recomputed immediately before they
+        // are derived (§16.2 item 4)
+        if (secp.verifyHash(peer[slot], h, H_TH, buf, sigOff) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
         }
         transferKeys(n, h);
         identity.cardId(buf, dataOff, mem.sender, (short) 0);
@@ -322,12 +340,13 @@ final class Transfer {
         short life = state.life();
         byte[] h = mem.H;
         short ctLen = (short) (dataLen - 16);
-        mem.cmac.init(mem.kTm, Signature.MODE_SIGN);
-        mem.cmac.sign(buf, dataOff, ctLen, h, (short) 0);
-        short tOff = (short) (dataOff + ctLen);
-        short mac = Bytes.equal(h, (short) 0, buf, tOff, (short) 16);
-        if (mac != Const.CHECK_OK) {
+        if (mac(buf, dataOff, ctLen) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+        }
+        // the MAC recomputed immediately before decryption: decryption is in
+        // place, so ct is gone afterwards (§16.2 item 4)
+        if (mac(buf, dataOff, ctLen) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
         }
         mem.aesCbc.init(mem.kTe, Cipher.MODE_DECRYPT, Const.ZEROS, (short) 0, (short) 16);
         mem.aesCbc.doFinal(buf, dataOff, ctLen, buf, dataOff);
@@ -368,11 +387,8 @@ final class Transfer {
         if (life != Const.LIFE_BLANK) {
             reseal(buf, dataOff, c, origin);
         }
-        // the guards of T-INSTALL, immediately before the effect (§16.2 item 4): the
-        // stored MAC result and — not BLANK — every equality check, each twice
-        if (held(mac) != Const.CHECK_OK || held(mac) != Const.CHECK_OK) {
-            ISOException.throwIt(Const.SW_FAULT);
-        }
+        // the guards of T-INSTALL, immediately before the effect (§16.2 item 4):
+        // not BLANK — every equality check, each twice
         if (life != Const.LIFE_BLANK) {
             if (state.origin() != origin || state.origin() != origin) {
                 ISOException.throwIt(Const.SW_FAULT);
@@ -475,11 +491,22 @@ final class Transfer {
     }
 
     /**
-     * Pass-through so each evaluation of a §16.2 item 4 stored-result double check is an
-     * independent armable call — the role {@code Session.txDepth} plays for the depth gate.
+     * §9.14 check 1: {@code CMAC(K_tm, ct)} into {@link Mem#H}[0..16), compared with the tag in
+     * constant time.
      */
-    private static short held(short r) {
-        return r;
+    private short mac(byte[] buf, short ctOff, short ctLen) {
+        mem.cmac.init(mem.kTm, Signature.MODE_SIGN);
+        mem.cmac.sign(buf, ctOff, ctLen, mem.H, (short) 0);
+        return Bytes.equal(mem.H, (short) 0, buf, (short) (ctOff + ctLen), (short) 16);
+    }
+
+    /**
+     * The {@code sig_T} check of §9.13 step 5: {@code SHA-256("qntx-card/v1/offer" ‖ LK_T)} into
+     * {@link Mem#H}[hOff..hOff+32), verified under the peer slot.
+     */
+    private short offerSignature(byte[] buf, short lkOff, short slot, short hOff) {
+        hash(Const.LABEL_OFFER, buf, lkOff, Const.POINT_LEN, mem.H, hOff);
+        return secp.verifyHash(peer[slot], mem.H, hOff, buf, (short) (lkOff + Const.POINT_LEN));
     }
 
     /** Constant-time membership test of the 16-byte ID at {@code id[iOff]} in {@code ids}. */

@@ -39,11 +39,12 @@ final class TeardownTest {
         assertArrayEquals(new byte[170], Internals.secpCacheBytes(applet), "secpCache not wiped");
         assertArrayEquals(new byte[194], Internals.edStreamBytes(applet), "edStream not wiped");
         assertArrayEquals(new byte[105], Internals.edCacheBytes(applet), "edCache not wiped");
-        // the pending-transfer state of §9.14 (kTe, kTm, sender) dies with the session too
+        // the pending-transfer state of §9.14 (kTe, kTm, sender) dies with the session too;
+        // the keys are overwritten with fresh random values, never a constant (§16.2 item 4)
         ((AESKey) Internals.memField(applet, "kTe")).getKey(key, (short) 0);
-        assertArrayEquals(new byte[16], key, "kTe not wiped");
+        assertNotZero(key);
         ((AESKey) Internals.memField(applet, "kTm")).getKey(key, (short) 0);
-        assertArrayEquals(new byte[16], key, "kTm not wiped");
+        assertNotZero(key);
         assertArrayEquals(
                 new byte[16], (byte[]) Internals.memField(applet, "sender"), "sender not wiped");
         byte[] s = new byte[32];
@@ -240,8 +241,8 @@ final class TeardownTest {
     @Test
     void pendingTransferDiesWithTheSession() throws Exception {
         // arm a genuine pending import so kTe/kTm/sender hold nonzero secret state, then a
-        // SELECT must wipe them (§8.5 endPending runs on every teardown path — the
-        // zero-assertions live in assertDead above)
+        // SELECT must end them (§8.5 endPending runs on every teardown path — the
+        // assertions live in assertDead above)
         Card source = Vecs.factory();
         byte[] sa = Vecs.cardA(source);
         Vecs.blankFor(source, sa);

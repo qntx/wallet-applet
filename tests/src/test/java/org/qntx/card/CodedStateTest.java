@@ -139,6 +139,21 @@ final class CodedStateTest {
     }
 
     @Test
+    void checkStepsDeriveOkAndAreNotCodeSetMembers() {
+        // CHECK_FAIL ^ STEP_1 ^ STEP_2 = CHECK_OK; a single skipped conditional leaves
+        // FAIL ^ STEP_i, which no caller may accept — it must not be a code-set member
+        assertEquals(
+                Const.CHECK_OK,
+                (short) (Const.CHECK_FAIL ^ Const.CHECK_STEP_1 ^ Const.CHECK_STEP_2));
+        for (short step : new short[] {Const.CHECK_STEP_1, Const.CHECK_STEP_2}) {
+            short left = (short) (Const.CHECK_FAIL ^ step);
+            for (short c : CODES) {
+                assertNotEquals(c, left, "FAIL ^ step must not be a code-set member");
+            }
+        }
+    }
+
+    @Test
     void corruptOfferAndOriginAreReadAsFaultsOnlyWhenUsed() {
         // origin/offer are not read by any core command; only verify the coded values differ
         // from every neighbor by >= 8 bits, which the pairwise test already covers.

@@ -416,8 +416,9 @@ The inner status word is the result of the command.
 A session is torn down by: `SELECT` of the wallet applet; `OPEN`; a failure in §8.3 steps 2–5;
 counter exhaustion; any inner `6F00` (after its response record is sent); card reset or loss of
 the field. Teardown wipes, in this order: the `verified` flag, the decrypted seed, the
-derivation caches, the Ed25519 stream, the pending export and import states, the `waited` count,
-the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory. The applet wipes them explicitly in `select()`
+derivation caches, the Ed25519 stream, the pending export and import states (their transfer keys
+`K_te` and `K_tm` overwritten with fresh random values, never a constant — §16.2 item 4), the
+`waited` count, the session keys and `ctr`. All of these live in `CLEAR_ON_DESELECT` memory. The applet wipes them explicitly in `select()`
 and in `OPEN`, and again in `deselect()` as defence in depth; no property depends on `deselect()`
 being called (a loss of the field calls nothing, and the NDEF applet shares the wallet's context,
 so selecting it does not clear `CLEAR_ON_DESELECT` memory). The domain parameters of a transient
@@ -1086,13 +1087,25 @@ belongs to a past transfer or ciphertext (§3 item 7).
    T-OK, decryption and `verified` are reachable only through two independent branches, each
    comparing a coded result with `CHECK_OK`, whose fall-through path is the failure path; T-OK
    additionally requires the fingerprint check of §9.5 step 8.
-4. Each of the following checks is evaluated twice, with coded results, immediately before the
-   effect it guards: the `life` check of `PERSONALIZE`, `CREATE`, `OFFER`, `IMPORT` and `ERASE`;
-   `verified` before each signature, public key, `CHANGE` effect, `ERASE` effect and export
-   payload; the certificate and membership checks of `EXPORT`; the equality checks of `IMPORT` in
-   `LOADED`; the gates of `VERIFY` steps 2 and 6 (in step 2 the two evaluations use the two
-   independent reads `f_a` and `f_b`). The wait check of `VERIFY` step 3 is evaluated
+4. Each of the following checks is evaluated twice, with coded results, the second evaluation
+   immediately before the effect it guards: the `life` check of `PERSONALIZE`, `CREATE`,
+   `OFFER`, `IMPORT` and `ERASE`; `verified` before each signature, public key, `CHANGE` effect,
+   `ERASE` effect and export payload; the equality checks of `IMPORT` in `LOADED`; the gates of
+   `VERIFY` steps 2 and 6 (in step 2 the two evaluations use the two independent reads `f_a` and
+   `f_b`). The wait check of `VERIFY` step 3 is evaluated
    once: skipping it saves one wait and cannot raise the number of comparisons above `L`.
+   The checks that gate seed export, the peer-key slot write and seed import are evaluated twice
+   by independent recomputation — the second evaluation repeats the verification, MAC
+   computation, membership lookup or state read; it never re-tests a stored result: in `EXPORT`
+   `P1 = 0x00` the certificate, membership and `sig_T` checks, recomputed before `sig_S`, the
+   pending export keys and `E` are produced; in `EXPORT` `P1 = 0x01` the pending-export check,
+   before the payload is encrypted; in `IMPORT` `P1 = 0x00` the certificate and — in `LOADED` —
+   the membership check, before the peer-key slot write, and `sig_S`, before the pending import
+   keys are derived; in `IMPORT` `P1 = 0x01` the MAC check, before the payload is decrypted. A
+   signature verification's coded result is derived from the engine's boolean through two
+   independent conditionals, so one skipped branch cannot yield the success value. Ending a
+   pending state (§9.2, §8.5) overwrites `K_te` and `K_tm` with fresh random values, never a
+   constant, so an output produced past a bypassed pending check is under keys no one holds.
 5. Every signature is self-verified before output (§12): ECDSA with `verifyPreComputedHash`
    under the leaf public key computed by public derivation (`K_par + IL·G`) for a non-hardened
    leaf, or `k_leaf·G` for a hardened leaf; BIP-340 per BIP-340 `Verify` with

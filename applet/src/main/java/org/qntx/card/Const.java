@@ -220,6 +220,16 @@ final class Const {
     static final short CHECK_MALFORMED = (short) 0x8888;
 
     /**
+     * The two derivation steps {@link Secp256k1#verifyHash} applies to {@link #CHECK_FAIL}: {@code
+     * CHECK_FAIL ^ CHECK_STEP_1 ^ CHECK_STEP_2 = CHECK_OK}. A single skipped branch leaves {@code
+     * 0x66A5} or {@code 0x5A66}, not a code-set member, which every caller rejects as {@code !=
+     * CHECK_OK} (§16.2 items 1, 4). The steps themselves are not code-set members.
+     */
+    static final short CHECK_STEP_1 = (short) 0x3C00;
+
+    static final short CHECK_STEP_2 = (short) 0x00C3;
+
+    /**
      * §4.3: the coded value the {@code init} field holds once every initialisation step ran — an
      * RM(1,4) codeword, pairwise Hamming distance ≥ 8 to the other coded constants and ≥ 5 to every
      * step index 0 … {@link #INIT_STEPS} − 1, which occupy the field until then.

@@ -261,12 +261,12 @@ final class Session {
 
     /**
      * §8.5: wipes, in spec order, the {@code verified} flag, the session seed, the derivation
-     * caches, the pending state, {@code waited}, the four session keys (overwritten, never {@code
-     * clearKey}; architecture §4), {@code ctr} and the open flag. If a session was open, {@link
-     * #initEngines} then re-arms the record engines on the zeroed keys so no engine keeps a
-     * session-key schedule past the session (§16.3); a teardown with nothing to tear down (e.g. a
-     * bare SELECT) skips it. Idempotent; also runs in {@code select()} and OPEN without relying on
-     * deselection.
+     * caches, the pending state (its transfer keys overwritten with fresh random values, §16.2 item
+     * 4), {@code waited}, the four session keys (overwritten, never {@code clearKey}; architecture
+     * §4), {@code ctr} and the open flag. If a session was open, {@link #initEngines} then re-arms
+     * the record engines on the zeroed keys so no engine keeps a session-key schedule past the
+     * session (§16.3); a teardown with nothing to tear down (e.g. a bare SELECT) skips it.
+     * Idempotent; also runs in {@code select()} and OPEN without relying on deselection.
      */
     void teardown() {
         short wasOpen = getWord(O_OPEN);
@@ -400,16 +400,23 @@ final class Session {
     /**
      * Ends the active pending state (§9.2): wipes the Ed25519 stream {@link Mem#edStream}, resets
      * the shared SHA-512 engine the stream hashes with, overwrites the pending export/import keys
-     * {@link Mem#kTe}/{@link Mem#kTm} and wipes the pending sender {@link Mem#sender} (§8.5, every
-     * run — the keys hold a completed or aborted transfer's shared secret), and clears the word.
-     * Idempotent — also runs when the word is already {@code 0x0000}. The digest reset is the only
-     * stream-state cleanup: {@code begin} relies on it rather than resetting again.
+     * {@link Mem#kTe}/{@link Mem#kTm} with fresh random values and wipes the pending sender {@link
+     * Mem#sender} (§8.5, every run — the keys hold a completed or aborted transfer's shared
+     * secret), and clears the word. Idempotent — also runs when the word is already {@code 0x0000}.
+     * The digest reset is the only stream-state cleanup: {@code begin} relies on it rather than
+     * resetting again.
      */
     private void endPending() {
         Bytes.wipe(mem.edStream, (short) 0, (short) mem.edStream.length);
         mem.resetSha512();
-        mem.kTe.setKey(Const.ZEROS, (short) 0);
-        mem.kTm.setKey(Const.ZEROS, (short) 0);
+        // outside a pending transfer K_te/K_tm must be keys nobody holds: fresh
+        // random values, never a constant, so a pending check bypassed by a fault
+        // encrypts/MACs under unknown keys (§16.2 item 4); sender stages them and
+        // is wiped right after
+        mem.random.nextBytes(mem.sender, (short) 0, (short) 16);
+        mem.kTe.setKey(mem.sender, (short) 0);
+        mem.random.nextBytes(mem.sender, (short) 0, (short) 16);
+        mem.kTm.setKey(mem.sender, (short) 0);
         Bytes.wipe(mem.sender, (short) 0, (short) mem.sender.length);
         setWord(O_PENDING, (short) 0);
     }

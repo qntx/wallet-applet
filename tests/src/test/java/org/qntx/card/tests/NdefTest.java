@@ -364,10 +364,12 @@ final class NdefTest {
         assertArrayEquals(new byte[170], Internals.secpCacheBytes(wallet), "secpCache not wiped");
         assertArrayEquals(new byte[105], Internals.edCacheBytes(wallet), "edCache not wiped");
         assertArrayEquals(new byte[194], Internals.edStreamBytes(wallet), "edStream not wiped");
+        // kTe/kTm are TYPE_AES_TRANSIENT_DESELECT: the platform clears them on the
+        // deselection itself, after endPending's random overwrite (§16.2 item 4)
         ((AESKey) Internals.memField(wallet, "kTe")).getKey(key, (short) 0);
-        assertArrayEquals(new byte[16], key, "kTe not wiped");
+        assertArrayEquals(new byte[16], key, "kTe not cleared");
         ((AESKey) Internals.memField(wallet, "kTm")).getKey(key, (short) 0);
-        assertArrayEquals(new byte[16], key, "kTm not wiped");
+        assertArrayEquals(new byte[16], key, "kTm not cleared");
         assertArrayEquals(
                 new byte[16], (byte[]) Internals.memField(wallet, "sender"), "sender not wiped");
         assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT));

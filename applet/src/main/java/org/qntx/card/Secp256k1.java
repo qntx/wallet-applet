@@ -180,7 +180,9 @@ final class Secp256k1 {
     /**
      * Verifies {@code r ‖ s} over a 32-byte precomputed hash; {@code CHECK_MALFORMED} on an
      * out-of-range scalar (it cannot have come from a signature), {@code CHECK_FAIL} on a bad
-     * signature or a {@link CryptoException} from the engine.
+     * signature or a {@link CryptoException} from the engine. The engine's boolean becomes the
+     * coded result through two independent conditionals ({@link Const#CHECK_STEP_1}/{@link
+     * Const#CHECK_STEP_2}), so a single skipped branch cannot yield {@code CHECK_OK}.
      */
     short verifyHash(ECPublicKey key, byte[] hash, short hOff, byte[] rs, short rsOff) {
         short derLen = rsToDer(rs, rsOff, mem.W, Mem.W_DER);
@@ -189,9 +191,20 @@ final class Secp256k1 {
         }
         try {
             ecdsa.init(key, Signature.MODE_VERIFY);
-            return ecdsa.verifyPreComputedHash(hash, hOff, Const.HASH_LEN, mem.W, Mem.W_DER, derLen)
-                    ? Const.CHECK_OK
-                    : Const.CHECK_FAIL;
+            boolean valid =
+                    ecdsa.verifyPreComputedHash(
+                            hash, hOff, Const.HASH_LEN, mem.W, Mem.W_DER, derLen);
+            // the coded result is derived through two independent conditionals, so
+            // one skipped branch yields CHECK_FAIL ^ STEP_i, never CHECK_OK
+            // (§16.2 item 4)
+            short r = Const.CHECK_FAIL;
+            if (valid) {
+                r ^= Const.CHECK_STEP_1;
+            }
+            if (valid) {
+                r ^= Const.CHECK_STEP_2;
+            }
+            return r;
         } catch (CryptoException e) {
             return Const.CHECK_FAIL;
         }
