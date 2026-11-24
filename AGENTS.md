@@ -32,6 +32,11 @@ code and spec change in the same pull request, and a disagreement between them i
 - `./gradlew :tests:pitest` — mutation tests on gate classes.
 - `./gradlew :tests:realCard -PrealCard="<reader>"` — real-card suite (never in CI).
 - `./gradlew :sim:shadowJar` — `card-sim.jar`.
+- `./gradlew clean --write-verification-metadata sha256 build :tests:pitest spotlessCheck
+  cyclonedxBom dist :sim:shadowJar :tools:installDist :tests:realCardClasses
+  :tests:admissionProbeCap :tests:memProbeCap :tests:realCard :tests:generateVectors` —
+  regenerate `gradle/verification-metadata.xml` after any dependency change; `clean` forces the
+  lazily-resolved configurations; review the diff.
 
 ## Conventions
 

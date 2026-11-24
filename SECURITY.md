@@ -23,5 +23,17 @@ certification.
 ## Supply chain
 
 The CAP build is reproducible (fixed timestamps, sorted inputs; CI builds it twice and compares the
-SHA-256). Dependencies are pinned in `gradle/libs.versions.toml` and `spec/vectors/gen/ts/bun.lock`;
-GitHub Actions are pinned by commit.
+SHA-256). Dependency versions are pinned in `gradle/libs.versions.toml` and
+`spec/vectors/gen/ts/bun.lock`; GitHub Actions are pinned by commit.
+
+Every Gradle artifact resolved from Maven Central, the Gradle plugin portal or the third-party
+repository `mvn.javacard.pro` (which serves the `com.github.martinpaljak` group: ant-javacard,
+GlobalPlatformPro and apdu4j) is checked against the SHA-256 recorded in
+`gradle/verification-metadata.xml`; a missing or different checksum fails the build in CI and in
+release. The hashes were recorded at first resolution (trust on first use); the ant-javacard and
+GlobalPlatformPro artifacts were additionally cross-checked by direct download against the upstream
+GitHub release assets of `martinpaljak/ant-javacard` and `martinpaljak/GlobalPlatformPro`: the
+assets are fat executable jars, different bytes than the thin Maven artifacts, but every class the
+thin jar contains is byte-identical inside them. Signatures are not verified. The Gradle wrapper is
+pinned by `distributionSha256Sum`, the JDK comes from `actions/setup-java` in CI and release, and
+release builds disable toolchain auto-download.

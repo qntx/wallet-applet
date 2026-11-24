@@ -34,6 +34,13 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 QuantX"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
 
+# Gradle rewrites this file on --write-verification-metadata; it cannot carry a header.
+[[annotations]]
+path = ["gradle/verification-metadata.xml"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 QuantX"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
 [[annotations]]
 path = ["sim/jcardsim/**"]
 precedence = "aggregate"
