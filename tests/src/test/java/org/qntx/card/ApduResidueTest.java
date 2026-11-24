@@ -4,6 +4,7 @@ package org.qntx.card;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.lang.reflect.Field;
 import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 import org.qntx.card.host.Crypto;
@@ -25,7 +26,9 @@ import org.qntx.card.tests.Vecs;
  */
 final class ApduResidueTest {
     private static final int INS_CREATE = 0x21;
+    private static final int INS_VERIFY = 0x22;
     private static final int INS_OFFER = 0x40;
+    private static final int INS_EXPORT = 0x41;
     private static final int INS_IMPORT = 0x42;
 
     private static byte[] concat(byte[]... parts) {
@@ -176,5 +179,133 @@ final class ApduResidueTest {
         }
         assertEquals(0x6F00, Vecs.sw(rapdu), "IMPORT must end outer 6F00");
         assertAbsent(rig.card, Vecs.seed(), "IMPORT P1=01 payload seed");
+    }
+
+    private static byte[] field(Object o, String name) {
+        try {
+            Field f = o.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return (byte[]) f.get(o);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
+    void badPaddingLeavesNoPlaintext() throws Exception {
+        // §8.3 step 5: a well-formed record whose plaintext is not M2 — the tag checks,
+        // the decryption runs in place, unpad fails and the torn 6982 leaves the whole
+        // buffer for process()'s wipe (§16.3 item 3)
+        Card card = Vecs.blankSelf();
+        Session session = Vecs.open(card);
+        byte[] kce = field(session, "kce");
+        byte[] kcm = field(session, "kcm");
+        byte[] pattern = new byte[32];
+        for (int i = 0; i < pattern.length; i++) {
+            pattern[i] = (byte) (0x30 + i);
+        }
+        // 48 B of padding-free plaintext ending in zeros: the last non-zero byte is not
+        // 0x80, so M2 unpad must fail after the record decrypts in place
+        byte[] plain = concat(pattern, new byte[16]);
+        byte[] seed = new byte[16];
+        seed[0] = 0x01;
+        byte[] iv = Crypto.aesBlock(kce, seed);
+        byte[] ct = Crypto.aesCbc(kce, iv, plain, true);
+        byte[] tag = new byte[8];
+        System.arraycopy(Crypto.cmac(kcm, Crypto.u16(0), ct), 0, tag, 0, 8);
+        byte[] apdu = new byte[5 + ct.length + 8 + 1];
+        apdu[0] = (byte) 0x80;
+        apdu[1] = 0x12;
+        apdu[4] = (byte) (ct.length + 8);
+        System.arraycopy(ct, 0, apdu, 5, ct.length);
+        System.arraycopy(tag, 0, apdu, 5 + ct.length, 8);
+        assertEquals(0x6982, Vecs.sw(card.transmit(apdu)));
+        assertAbsent(card, pattern, "bad-padding record plaintext");
+    }
+
+    /**
+     * A LOADED target (imported wallet, members: source ‖ target) holding a pending import of the
+     * source's genuine next export.
+     */
+    private static final class LoadRig {
+        final Card target;
+        final Session session;
+        final byte[] payload;
+
+        LoadRig() throws Exception {
+            Card source = Vecs.factory();
+            byte[] aS = Vecs.cardA(source);
+            byte[] certS = Vecs.certFor(aS);
+            Vecs.blankFor(source, aS);
+            Session sS = Vecs.open(source);
+            target = Vecs.factory();
+            byte[] aT = Vecs.cardA(target);
+            byte[] certT = Vecs.certFor(aT);
+            Vecs.blankFor(target, aT);
+            session = Vecs.open(target);
+            assertEquals(
+                    0x9000,
+                    Vecs.roundtrip(
+                                    source,
+                                    sS,
+                                    INS_CREATE,
+                                    1,
+                                    0,
+                                    concat(Vecs.accessHash(), Vecs.seed(), Ids.cardId(aT)))
+                            .sw(),
+                    "CREATE");
+            assertEquals(
+                    0x9000,
+                    Vecs.roundtrip(source, sS, INS_VERIFY, 0, 0, Vecs.accessHash()).sw(),
+                    "VERIFY");
+            Response offer = Vecs.roundtrip(target, session, INS_OFFER, 0, 0, new byte[0]);
+            assertEquals(0x9000, offer.sw(), "OFFER");
+            Response head =
+                    Vecs.roundtrip(source, sS, INS_EXPORT, 0, 0, concat(certT, offer.data()));
+            assertEquals(0x9000, head.sw(), "EXPORT0");
+            Response pay = Vecs.roundtrip(source, sS, INS_EXPORT, 1, 0, Vecs.accessHashNew());
+            assertEquals(0x9000, pay.sw(), "EXPORT1");
+            assertEquals(
+                    0x9000,
+                    Vecs.roundtrip(target, session, INS_IMPORT, 0, 0, concat(certS, head.data()))
+                            .sw(),
+                    "IMPORT0");
+            assertEquals(
+                    0x9000,
+                    Vecs.roundtrip(target, session, INS_IMPORT, 1, 0, pay.data()).sw(),
+                    "IMPORT1");
+            // the LOADED target offers again and a second genuine export arms the
+            // pending import under test
+            offer = Vecs.roundtrip(target, session, INS_OFFER, 0, 0, new byte[0]);
+            assertEquals(0x9000, offer.sw(), "OFFER");
+            head = Vecs.roundtrip(source, sS, INS_EXPORT, 0, 0, concat(certT, offer.data()));
+            assertEquals(0x9000, head.sw(), "EXPORT0");
+            pay = Vecs.roundtrip(source, sS, INS_EXPORT, 1, 0, Vecs.accessHashNew());
+            assertEquals(0x9000, pay.sw(), "EXPORT1");
+            assertEquals(
+                    0x9000,
+                    Vecs.roundtrip(target, session, INS_IMPORT, 0, 0, concat(certS, head.data()))
+                            .sw(),
+                    "IMPORT0");
+            payload = pay.data();
+        }
+    }
+
+    @Test
+    void import1GuardFaultLeavesNoPlaintext() throws Exception {
+        // the T-INSTALL guard (§16.2 item 4) recomputes the stored members against the
+        // decrypted payload twice; forcing the first recompute to disagree is an inner
+        // 6F00 — the plaintext is covered by wrap's tail wipe (§16.3 item 3)
+        LoadRig rig = new LoadRig();
+        byte[] rapdu;
+        try {
+            Fault.arm("State.equal", 3, Const.CHECK_FAIL);
+            rapdu = rig.target.transmit(rig.session.wrap(INS_IMPORT, 1, 0, rig.payload));
+        } finally {
+            Fault.reset();
+        }
+        assertEquals(
+                0x6F00, rig.session.unwrap(rapdu).sw(), "the recomputed members check must fault");
+        assertAbsent(rig.target, Vecs.seed(), "IMPORT P1=01 payload seed");
     }
 }

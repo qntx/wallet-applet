@@ -268,8 +268,8 @@ qntx-card personalise --sim 127.0.0.1:35963 --scp 03 --baseline baseline.txt \
 
 Measured on this tree (architecture §14.7 R6; the CI build job reports them again):
 
-- **CAP**: `qntx-card.cap` is 133,675 B; the load-file components inside it
-  (`org/qntx/card/javacard/*.cap`) total 27,822 B.
+- **CAP**: `qntx-card.cap` is 133,656 B; the load-file components inside it
+  (`org/qntx/card/javacard/*.cap`) total 27,814 B.
 - **Transient**: the simulator's memory report ends `total 2776 / 3990 (budget 3390)` — 2,776 B
   of the 3,990 B JCAlgTest pool, inside the §5.1 acceptance budget of 3,390 B.
 - **Persistent**: ≈ 7.1 KB of objects and arrays plus the ≈ 28 KB CAP against the 157,524 B

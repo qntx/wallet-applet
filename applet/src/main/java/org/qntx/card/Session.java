@@ -214,7 +214,7 @@ final class Session {
         }
         short plen = Bytes.unpad(buf, ISO7816.OFFSET_CDATA, ctLen);
         if (plen < 0) {
-            Bytes.wipe(buf, ISO7816.OFFSET_CDATA, ctLen);
+            // process() wipes the APDU buffer on every exceptional exit (§16.3 item 3)
             tearThrow(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
         }
         return plen;
