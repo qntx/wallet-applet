@@ -147,6 +147,7 @@ val admissionProbeCap by tasks.registering {
                 .get(),
             probeSources.asFile,
             listOf("org.qntx.card.probe.AdmissionProbe" to "F0716E7478FF01"),
+            rootProject.layout.projectDirectory.asFile,
         )
         CapBuild.normalizeCap(out)
     }
@@ -189,6 +190,7 @@ val memProbeCap by tasks.registering {
                 "org.qntx.card.WalletApplet" to "F0716E74780101",
                 "org.qntx.card.NdefApplet" to "F0716E74780201",
             ),
+            rootProject.layout.projectDirectory.asFile,
         )
         CapBuild.normalizeCap(out)
     }

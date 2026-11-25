@@ -3,7 +3,9 @@
 import org.gradle.api.AntBuilder
 import org.gradle.kotlin.dsl.withGroovyBuilder
 import java.io.File
+import java.security.MessageDigest
 import java.time.LocalDateTime
+import java.util.TreeMap
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -31,7 +33,9 @@ object CapBuild {
         targetSdk: String,
         sources: File,
         applets: List<Pair<String, String>>,
+        repoRoot: File,
     ) {
+        verifyJcdk(repoRoot, kit)
         ant.withGroovyBuilder {
             "taskdef"(
                 "name" to "javacard",
@@ -55,6 +59,63 @@ object CapBuild {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Verifies the pinned JCDK toolchain before conversion (SECURITY.md "Supply chain"):
+     * {@code gradle/jcdk-sha256.txt} under {@code root} lists every file of the kit
+     * {@code sdks/jc320v26.0_kit} the converter and its Ant task were taken from — each
+     * listed file must exist and hash to the recorded SHA-256, and no unlisted file may
+     * sit in the kit tree. A missing file, an extra file or a different hash fails the
+     * build before the converter runs.
+     */
+    private fun verifyJcdk(
+        root: File,
+        kit: File,
+    ) {
+        val manifest = File(root, "gradle/jcdk-sha256.txt")
+        check(manifest.isFile) { "JCDK integrity manifest missing: $manifest" }
+        val wanted = TreeMap<String, String>()
+        for (line in manifest.readLines()) {
+            val t = line.trim()
+            if (t.isEmpty() || t.startsWith("#")) {
+                continue
+            }
+            val parts = t.split(Regex("\\s+"), limit = 2)
+            require(parts.size == 2 && parts[0].length == 64) {
+                "bad line in $manifest: $line"
+            }
+            wanted[parts[1].trim()] = parts[0]
+        }
+        val problems = ArrayList<String>()
+        val digest = MessageDigest.getInstance("SHA-256")
+        for ((path, sha) in wanted) {
+            val f = File(root, path)
+            if (!f.isFile) {
+                problems += "missing $path"
+            } else {
+                val got =
+                    digest.digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+                if (got != sha) {
+                    problems += "sha256 mismatch $path"
+                }
+            }
+        }
+        val rootPath = root.toPath()
+        kit
+            .walkTopDown()
+            .filter { it.isFile }
+            .forEach { f ->
+                val rel =
+                    rootPath.relativize(f.toPath()).toString().replace(File.separatorChar, '/')
+                if (!wanted.containsKey(rel)) {
+                    problems += "extra file in the JCDK kit: $rel"
+                }
+            }
+        check(problems.isEmpty()) {
+            "JCDK toolchain verification failed (gradle/jcdk-sha256.txt):\n  " +
+                problems.joinToString("\n  ")
         }
     }
 

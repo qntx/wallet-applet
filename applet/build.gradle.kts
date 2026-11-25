@@ -55,6 +55,7 @@ val cap by tasks.registering {
                 "org.qntx.card.WalletApplet" to walletAid,
                 "org.qntx.card.NdefApplet" to ndefAid,
             ),
+            rootProject.layout.projectDirectory.asFile,
         )
         CapBuild.normalizeCap(out)
     }
