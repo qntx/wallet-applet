@@ -244,6 +244,16 @@ final class Const {
     static final short PENDING_EXPORT = (short) 0x6996;
     static final short PENDING_IMPORT = (short) 0x9669;
 
+    /**
+     * The shadow-word members of the RM(1,4) set (§16.2 item 1): unused codewords, Hamming distance
+     * 8 from every member above, from {@code 0x0000}/{@code 0xFFFF} and from each other. A guarded
+     * check's second evaluation reads the shadow word so the two evaluations never share one
+     * transient flag.
+     */
+    static final short VERIFIED_SHADOW = (short) 0xA55A;
+
+    static final short PENDING_EXPORT_SHADOW = (short) 0xC33C;
+
     /** Bit in {@link #INNER_LIFE} rows for each coded life value (dispatch table of §9.2). */
     static final short LIFE_BIT_BLANK = 2;
 

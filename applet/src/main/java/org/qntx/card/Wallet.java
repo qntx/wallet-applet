@@ -225,9 +225,12 @@ final class Wallet {
         derivation.wipeCaches();
         // the candidate is only copied — not used — before the gate of step 6 passes
         Util.arrayCopy(buf, dataOff, w, W_H, Const.HASH_LEN);
-        // step 2: two independent reads, each test evaluated on each read (§16.2 item 4)
+        // step 2: three independent reads — a fault forcing one cannot decide
+        // both of step 6's gate evaluations (§16.2 item 4); each of fa and fb
+        // gets the tests below
         short fa = state.readFails();
         short fb = state.readFails();
+        short fc = state.readFails();
         if (fa == -1) {
             tErase();
             ISOException.throwIt(Const.SW_FAULT);
@@ -252,11 +255,13 @@ final class Wallet {
         session.clearWaited();
         // step 5: T-FAIL
         tFail((short) (fa + 1));
-        // step 6: the read-back gate, twice independently (§16.2 item 4)
+        // step 6: the read-back gate, twice independently — once on fb, once on
+        // the third read fc, so the two evaluations never share one read
+        // (§16.2 item 4)
         if (gate(fb) != Const.CHECK_OK) {
             gateFail();
         }
-        if (gate(fb) != Const.CHECK_OK) {
+        if (gate(fc) != Const.CHECK_OK) {
             gateFail();
         }
         // step 7: two independent KDF108+CMAC computations (§16.2 item 3)
@@ -293,11 +298,12 @@ final class Wallet {
         Util.arrayCopy(buf, dataOff, w, W_H, Const.HASH_LEN);
         mem.random.nextBytes(w, W_NEWKEY, Const.AES_KEY_LEN);
         wrap(w, mem.seed, (short) 0);
-        // the guarded check, evaluated twice, immediately before T-CHANGE (§16.2 item 4)
+        // the guarded check, evaluated twice, immediately before T-CHANGE (§16.2 item 4);
+        // the second evaluation reads the shadow word
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (session.verified() != Const.VERIFIED_YES) {
+        if (session.verifiedShadow() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         tChange();
@@ -319,7 +325,7 @@ final class Wallet {
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (session.verified() != Const.VERIFIED_YES) {
+        if (session.verifiedShadow() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         tErase();

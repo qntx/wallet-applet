@@ -99,11 +99,12 @@ final class Ed25519 {
         wei.mulBase(ed, ED_A, ed, ED_PT_A); // A = a·G_W
         // identity.id clobbers P[65..130) and parts of W — called before r is computed
         identity.id(h, H_ID);
-        // the guarded check, evaluated twice, immediately before T-EDCTR (§16.2 item 4)
+        // the guarded check, evaluated twice, immediately before T-EDCTR (§16.2 item 4);
+        // the second evaluation reads the shadow word
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (session.verified() != Const.VERIFIED_YES) {
+        if (session.verifiedShadow() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         // the counter is re-read: derive's HMACs own H and overwrote the N copy above
@@ -184,11 +185,12 @@ final class Ed25519 {
         if (Bytes.equal(p, (short) 65, ed, ED_PT_R, Const.POINT_LEN) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        // the guarded check, evaluated twice, immediately before the output (§16.2 item 4)
+        // the guarded check, evaluated twice, immediately before the output (§16.2 item 4);
+        // the second evaluation reads the shadow word
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (session.verified() != Const.VERIFIED_YES) {
+        if (session.verifiedShadow() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         Bytes.reverse(h, F_S, buf, (short) 0, (short) 32); // le32(S)

@@ -16,17 +16,20 @@ import javacardx.crypto.Cipher;
 
 /**
  * The card-to-card transfer commands OFFER, EXPORT and IMPORT (protocol.md §9.12–9.14, §11), the
- * persistent {@code linkKey} pair and the two state-free peer-key slots of §16.1 item 1. Peer
- * certificates authenticate under the batch CA; membership decides which slot a peer key takes (in
- * {@code BLANK} always slot 0, in {@code LOADED} the position among the other members).
- * Decompressed peer points are staged in {@link Mem#W}[0..65) only until the {@code setW}
- * comparison — {@link ModArith} owns all of {@code W} during its operations. Pending export and
- * import keep {@code K_te ‖ K_tm} in {@link Mem#kTe}/{@link Mem#kTm} and the sender ID in {@link
- * Mem#sender}; {@link Session} overwrites the keys with fresh random values and wipes the sender
- * when the pending state ends (§16.2 item 4). Every check that gates a seed transfer or the peer
- * slot write is evaluated twice by independent recomputation — the second evaluation repeats the
- * verification, MAC computation, membership lookup or state read immediately before the effect it
- * guards; it never re-tests a stored result.
+ * persistent {@code linkKey} pair and the two peer-key slots of §16.1 item 1, initialised to the
+ * nothing-up-my-sleeve {@link Secp256k1#PEER_INIT} point so no slot ever holds a key whose discrete
+ * logarithm is known. Peer certificates authenticate under the batch CA; membership decides which
+ * slot a peer key takes (in {@code BLANK} always slot 0, in {@code LOADED} the position among the
+ * other members). Decompressed peer points are staged in {@link Mem#W}[0..65) only until the {@code
+ * setW} comparison — {@link ModArith} owns all of {@code W} during its operations. Pending export
+ * and import keep {@code K_te ‖ K_tm} in {@link Mem#kTe}/{@link Mem#kTm} and the sender ID in
+ * {@link Mem#sender}; {@link Session} overwrites the keys with fresh random values and wipes the
+ * sender when the pending state ends (§16.2 item 4). Every check that gates a seed transfer or the
+ * peer slot write is evaluated twice by independent recomputation — the second evaluation repeats
+ * the verification, MAC computation, membership lookup or state read immediately before the effect
+ * it guards; it never re-tests a stored result: the peer key is decompressed again and compared
+ * with the slot before the slot is used again, the transcript is recomputed into its own buffer,
+ * and the pending-export state is read from a separate shadow word.
  */
 final class Transfer {
     /** {@link Mem#W} offset where a decompressed peer point is staged for {@code setW}. */
@@ -98,15 +101,17 @@ final class Transfer {
 
     /**
      * Initialisation step 1 (§4.3): the secp256k1 domain into the link pair and both peer slots,
-     * and the base point into the peer slots — an initialised slot lets {@code setPeer} skip the
-     * {@code CryptoException} path (§16.1 item 1). Idempotent.
+     * and the nothing-up-my-sleeve {@link Secp256k1#PEER_INIT} point into the peer slots — never
+     * {@code G}, so a slot a skipped {@code setPeer} leaves behind holds no key whose discrete
+     * logarithm is known; an initialised slot lets {@code setPeer} skip the {@code CryptoException}
+     * path (§16.1 item 1). Idempotent.
      */
     void initDomains() {
         Secp256k1.setDomain((ECKey) linkKey.getPublic());
         Secp256k1.setDomain((ECKey) linkKey.getPrivate());
         for (short i = 0; i < 2; i++) {
             Secp256k1.setDomain(peer[i]);
-            peer[i].setW(Secp256k1.G, (short) 0, Const.POINT_LEN);
+            peer[i].setW(Secp256k1.PEER_INIT, (short) 0, Const.POINT_LEN);
         }
     }
 
@@ -203,23 +208,25 @@ final class Transfer {
         } finally {
             secp.wipeScalar();
         }
-        hashM(h, H_A, buf, dataOff, buf, lkOff, n, N_POINT);
+        hashM(h, H_A, buf, dataOff, buf, lkOff, n, N_POINT, H_TH);
         // the checks guarding the pending export keys and the E output, recomputed
         // (§16.2 item 4); the offer hash goes to H_SCALAR — H_TH holds TH — which
-        // also overwrites the dead e
+        // also overwrites the dead e. recheckPeer decompresses A_T again and compares
+        // it with the slot before the second verification uses it (§16.2 item 4)
         if (identity.verifyCert(buf, dataOff) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         if (memberSlot(buf, dataOff) != slot) {
             ISOException.throwIt(Const.SW_FAULT);
         }
+        recheckPeer(buf, dataOff, slot);
         if (offerSignature(buf, lkOff, slot, H_SCALAR) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         identity.signHash(h, H_TH, buf, Const.POINT_LEN);
-        transferKeys(n, h);
+        transferKeys(n, h, H_TH);
         Util.arrayCopy(n, N_POINT, buf, (short) 0, Const.POINT_LEN);
-        session.setPending(Const.PENDING_EXPORT);
+        session.setPendingExport();
         return (short) (Const.POINT_LEN + 64);
     }
 
@@ -243,16 +250,17 @@ final class Transfer {
             ISOException.throwIt(Const.SW_FAULT);
         }
         short ctLen = Bytes.pad(h, (short) 0, (short) (98 + c * 16));
-        // the guarded check, evaluated twice, immediately before the output (architecture §6)
+        // the guarded check, evaluated twice, immediately before the output (architecture §6);
+        // the second evaluation reads the shadow word (§16.2 item 1)
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (session.verified() != Const.VERIFIED_YES) {
+        if (session.verifiedShadow() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         // the pending-export check's second evaluation, immediately before the
-        // pending keys are used (§16.2 item 4)
-        if (session.pending() != Const.PENDING_EXPORT) {
+        // pending keys are used (§16.2 item 4), on the shadow word
+        if (session.pendingExportShadow() != Const.PENDING_EXPORT) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         mem.aesCbc.init(mem.kTe, Cipher.MODE_ENCRYPT, Const.ZEROS, (short) 0, (short) 16);
@@ -293,17 +301,18 @@ final class Transfer {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         // the guards of the peer-slot write, recomputed immediately before the
-        // effect (§16.2 item 4)
+        // effect (§16.2 item 4): the certificate again, and a fresh life read so
+        // a faulted first read of `life` cannot decide the member gate twice
         if (identity.verifyCert(buf, dataOff) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (life != Const.LIFE_BLANK && memberSlot(buf, dataOff) != slot) {
+        if (state.life() != Const.LIFE_BLANK && memberSlot(buf, dataOff) != slot) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         setPeer(slot, n, N_POINT);
         short eOff = (short) (dataOff + Const.CERT_LEN);
         linkPublic.getW(n, N_POINT);
-        hashM(buf, dataOff, h, H_A, n, N_POINT, buf, eOff);
+        hashM(buf, dataOff, h, H_A, n, N_POINT, buf, eOff, H_TH);
         short sigOff = (short) (eOff + Const.POINT_LEN);
         if (secp.verifyHash(peer[slot], h, H_TH, buf, sigOff) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
@@ -314,12 +323,18 @@ final class Transfer {
         if (secp.agree(linkPrivate, buf, eOff, n, N_Z) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
-        // sig_S guards the pending import keys, recomputed immediately before they
-        // are derived (§16.2 item 4)
-        if (secp.verifyHash(peer[slot], h, H_TH, buf, sigOff) != Const.CHECK_OK) {
+        // sig_S guards the pending import keys, recomputed in full on live data: A_S
+        // decompressed again and compared with the slot, A and LK read again, TH
+        // recomputed into its own slot and verified again; the pending keys come from
+        // the recomputed TH (§16.2 item 4)
+        recheckPeer(buf, dataOff, slot);
+        identity.identity(h, H_A);
+        linkPublic.getW(n, N_POINT);
+        hashM(buf, dataOff, h, H_A, n, N_POINT, buf, eOff, H_SCALAR);
+        if (secp.verifyHash(peer[slot], h, H_SCALAR, buf, sigOff) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        transferKeys(n, h);
+        transferKeys(n, h, H_SCALAR);
         identity.cardId(buf, dataOff, mem.sender, (short) 0);
         session.setPending(Const.PENDING_IMPORT);
         return 0;
@@ -388,8 +403,9 @@ final class Transfer {
             reseal(buf, dataOff, c, origin);
         }
         // the guards of T-INSTALL, immediately before the effect (§16.2 item 4):
-        // not BLANK — every equality check, each twice
-        if (life != Const.LIFE_BLANK) {
+        // not BLANK — a fresh life read so a faulted first read cannot decide
+        // the whole block twice — then every equality check, each twice
+        if (state.life() != Const.LIFE_BLANK) {
             if (state.origin() != origin || state.origin() != origin) {
                 ISOException.throwIt(Const.SW_FAULT);
             }
@@ -423,15 +439,34 @@ final class Transfer {
     }
 
     /**
-     * The peer slot write of §16.1 item 1: {@code getW} first, {@code setW} only on difference — a
-     * torn write only fails the current command, never changes later behaviour.
+     * The peer slot write of §16.1 item 1: {@code getW} first, {@code setW} when the slot does not
+     * already hold the point. The comparison's fall-through path is the write: skipping the branch
+     * writes, and a skipped write leaves {@link Secp256k1#PEER_INIT} or another member's key, under
+     * which the first evaluation's verification fails and the second evaluation's read-back differs
+     * (§16.2 item 4).
      */
     private void setPeer(short slot, byte[] point, short pOff) {
         peer[slot].getW(mem.P, P_GETW);
-        if (Bytes.equal(mem.P, P_GETW, point, pOff, Const.POINT_LEN) == Const.CHECK_OK) {
-            return;
+        if (Bytes.equal(mem.P, P_GETW, point, pOff, Const.POINT_LEN) != Const.CHECK_OK) {
+            peer[slot].setW(point, pOff, Const.POINT_LEN);
         }
-        peer[slot].setW(point, pOff, Const.POINT_LEN);
+    }
+
+    /**
+     * The peer-slot re-read of a second evaluation (§16.2 item 4): the certificate point is
+     * decompressed again and compared with the slot's still-current content. A skipped {@link
+     * #setPeer} or a clobbered slot makes the second evaluation see a different key than the first,
+     * and every disagreement is a fault — the second evaluation never trusts the key the first
+     * evaluation used.
+     */
+    private void recheckPeer(byte[] buf, short aOff, short slot) {
+        if (secp.decompress(buf, aOff, mem.W, W_PEER) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        peer[slot].getW(mem.P, P_GETW);
+        if (Bytes.equal(mem.P, P_GETW, mem.W, W_PEER, Const.POINT_LEN) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
     }
 
     /**
@@ -539,11 +574,13 @@ final class Transfer {
     }
 
     /**
-     * {@code TH = SHA-256("qntx-card/v1/export" ‖ A_S ‖ A_T ‖ LK ‖ E)} into {@link Mem#H}[0..32):
-     * the message the export signature covers (§9.13–9.14). The sender's compressed identity is
-     * {@code aS} (the card's own in {@link #export0}, the certificate's in {@link #import0}), the
-     * target's is {@code aT}, {@code lk} the target's 65-byte offer point, {@code e} the 65-byte
-     * export point.
+     * {@code TH = SHA-256("qntx-card/v1/export" ‖ A_S ‖ A_T ‖ LK ‖ E)} into {@link
+     * Mem#H}[thOff..thOff+32): the message the export signature covers (§9.13–9.14). The sender's
+     * compressed identity is {@code aS} (the card's own in {@link #export0}, the certificate's in
+     * {@link #import0}), the target's is {@code aT}, {@code lk} the target's 65-byte offer point,
+     * {@code e} the 65-byte export point and {@code thOff} the caller's TH slot — a second
+     * evaluation hashes into its own slot so a dropped recompute cannot leave the first
+     * evaluation's TH behind (§16.2 item 4).
      */
     private void hashM(
             byte[] aS,
@@ -553,7 +590,8 @@ final class Transfer {
             byte[] lk,
             short lkOff,
             byte[] e,
-            short eOff) {
+            short eOff,
+            short thOff) {
         // the four message parts are staged contiguously in W: W_PEER is consumed
         // by setPeer before export0's call, and no Wallet offset is live here
         byte[] w = mem.W;
@@ -562,7 +600,7 @@ final class Transfer {
         Util.arrayCopy(lk, lkOff, w, (short) (2 * Const.COMPRESSED_LEN), Const.POINT_LEN);
         Util.arrayCopy(
                 e, eOff, w, (short) (2 * Const.COMPRESSED_LEN + Const.POINT_LEN), Const.POINT_LEN);
-        hash(Const.LABEL_EXPORT, w, (short) 0, (short) 196, mem.H, H_TH);
+        hash(Const.LABEL_EXPORT, w, (short) 0, (short) 196, mem.H, thOff);
     }
 
     /** {@code out = SHA-256(label ‖ msg)} — the single-block message hash of §9.12. */
@@ -574,10 +612,12 @@ final class Transfer {
 
     /**
      * {@code K_te ‖ K_tm = KDF(Z, "qntx-card/v1/kdf-transfer", TH, 32)} (§9.13–9.14): the shared
-     * secret at {@code n[N_Z]} and the transcript hash at {@code h[H_TH]} become the pending keys;
-     * the key bytes are staged at {@code h[H_KEYS]}.
+     * secret at {@code n[N_Z]} and the transcript hash at {@code h[thOff]} become the pending keys;
+     * the key bytes are staged at {@code h[H_KEYS]}. The caller picks {@code thOff} so a second
+     * evaluation feeds {@link Kdf} its own recomputed TH, never the first evaluation's (§16.2 item
+     * 4).
      */
-    private void transferKeys(byte[] n, byte[] h) {
+    private void transferKeys(byte[] n, byte[] h, short thOff) {
         Kdf.kdf(
                 mem,
                 n,
@@ -585,7 +625,7 @@ final class Transfer {
                 Const.HASH_LEN,
                 Const.LABEL_KDF_TRANSFER,
                 h,
-                H_TH,
+                thOff,
                 Const.HASH_LEN,
                 h,
                 H_KEYS,

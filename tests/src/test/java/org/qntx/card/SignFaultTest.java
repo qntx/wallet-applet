@@ -345,13 +345,16 @@ final class SignFaultTest {
             Fault.arm("Bytes.equal", nth, Const.CHECK_FAIL);
             assertNoOutput(inner(0x33, 2, new byte[] {9}));
         }
-        // and finish's two verified() reads are calls 2 and 3 (the dispatch gate is 1)
-        for (int nth : new int[] {2, 3}) {
-            verified();
-            assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
-            Fault.arm("Session.verified", nth, Const.VERIFIED_NO);
-            assertNoOutput(inner(0x33, 2, new byte[] {9}));
-        }
+        // finish's two checks are Session.verified call 2 (the dispatch gate is 1) and
+        // the first verifiedShadow read — different words, each faulted alone
+        verified();
+        assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
+        Fault.arm("Session.verified", 2, Const.VERIFIED_NO);
+        assertNoOutput(inner(0x33, 2, new byte[] {9}));
+        verified();
+        assertEquals(0x9000, inner(0x33, 0, Vecs.pathEdSolana()).sw());
+        Fault.arm("Session.verifiedShadow", 1, Const.VERIFIED_NO);
+        assertNoOutput(inner(0x33, 2, new byte[] {9}));
     }
 
     @Test

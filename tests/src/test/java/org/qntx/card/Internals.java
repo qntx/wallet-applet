@@ -84,7 +84,7 @@ public final class Internals {
         return (byte[]) get(state(applet), "state");
     }
 
-    /** The transient {@code words[8]} of {@link Session} (open, verified, ctr, pending). */
+    /** The transient {@code words[14]} of {@link Session} (coded flags, ctr, shadows). */
     public static byte[] words(Applet applet) {
         return (byte[]) get(session(applet), "words");
     }
@@ -201,6 +201,13 @@ public final class Internals {
         byte[] out = new byte[65];
         peer[i].getW(out, (short) 0);
         return out;
+    }
+
+    /** Writes the 65-byte point into peer slot {@code i} (a preloaded attacker-known key). */
+    public static void setPeerW(Applet applet, int i, byte[] w65) {
+        javacard.security.ECPublicKey[] peer =
+                (javacard.security.ECPublicKey[]) get(transfer(applet), "peer");
+        peer[i].setW(w65, (short) 0, (short) 65);
     }
 
     /** The persistent link private scalar (T-OFFER/T-INSTALL/T-ERASE overwrite it). */

@@ -296,14 +296,14 @@ final class SignCommandTest {
 
     @Test
     void flippedVerifyReadsAreCaught() throws Exception {
-        // the double evaluation of session.verified before the output (§16.2 item 4):
-        // faulting either read is 6F00 and no signature leaves
+        // the double evaluation of the verified flag — word then shadow word — before
+        // the output (§16.2 item 4): faulting either read is 6F00 and no signature leaves
         verified();
         Fault.arm("Session.verified", 2, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x31, 0, ecdsaData(Vecs.pathSecpEvm())).sw());
 
         verified();
-        Fault.arm("Session.verified", 3, Const.VERIFIED_NO);
+        Fault.arm("Session.verifiedShadow", 1, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x31, 0, ecdsaData(Vecs.pathSecpEvm())).sw());
     }
 

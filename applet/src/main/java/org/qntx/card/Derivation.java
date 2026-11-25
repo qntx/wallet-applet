@@ -219,11 +219,12 @@ final class Derivation {
         derive(buf, p1, dataOff);
         byte[] n = mem.N;
         byte[] p = mem.P;
-        // the guarded check, evaluated twice, immediately before the output (§16.2 item 4)
+        // the guarded check, evaluated twice, immediately before the output (§16.2 item 4);
+        // the second evaluation reads the shadow word
         if (session.verified() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        if (session.verified() != Const.VERIFIED_YES) {
+        if (session.verifiedShadow() != Const.VERIFIED_YES) {
             ISOException.throwIt(Const.SW_FAULT);
         }
         if (p1 == CURVE_SECP) {

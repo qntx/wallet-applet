@@ -268,20 +268,29 @@ final class TransferFaultTest {
         Side target = loadedTarget(source);
         byte[][] e = armImport(target, source);
         int calls = measure(target, INS_IMPORT, 1, e[1], "State.life");
-        // the dispatch gate's read plus import1's own read and install's double read-back;
-        // eval 1 is the gate's (BLANK is an allowed life for IMPORT — arming it is benign)
-        assertTrue(calls >= 4, "life evaluations " + calls);
+        // dispatch(1), import1's local(2), the T-INSTALL guard's fresh read(3) and
+        // install's double read-back(4, 5); eval 1 is the gate's (BLANK is an allowed
+        // life for IMPORT — arming it is benign)
+        assertEquals(5, calls, "life evaluations " + calls);
         for (int i = 2; i <= calls; i++) {
             target.reopen();
             e = armImport(target, source);
             try {
-                // BLANK would skip every re-seal check — install's read-back must catch it
                 Fault.arm("State.life", i, Const.LIFE_BLANK);
                 int sw = target.inner(INS_IMPORT, 1, e[1]).sw();
-                assertNotEquals(0x9000, sw, "life eval " + i + " must not install");
-                assertTrue(
-                        sw == 0x6F00 || sw == 0x6A80 || sw == 0x6985,
-                        "life eval " + i + ": " + Integer.toHexString(sw));
+                if (i == 3) {
+                    // the guard's fresh read gates only the redundant second evaluation
+                    // of the equalities — eval 2's reseal already ran them — so a BLANK
+                    // here legitimately installs
+                    assertEquals(0x9000, sw, "life eval 3 skips only the redundant block");
+                } else {
+                    // BLANK would skip every re-seal check or fake the install life —
+                    // install's read-back must catch it
+                    assertNotEquals(0x9000, sw, "life eval " + i + " must not install");
+                    assertTrue(
+                            sw == 0x6F00 || sw == 0x6A80 || sw == 0x6985,
+                            "life eval " + i + ": " + Integer.toHexString(sw));
+                }
             } finally {
                 Fault.reset();
             }
@@ -443,9 +452,9 @@ final class TransferFaultTest {
         byte[] data = concat(target.cert, target.offer());
         assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw());
         int calls = measure(source, INS_EXPORT, 1, Vecs.accessHashNew(), "Session.verified");
-        // the dispatch gate plus the guarded double evaluation before the payload is
-        // output: M29 (the first in-handler check deleted) drops this to 2
-        assertEquals(3, calls, "verified evaluations");
+        // the dispatch gate plus the first in-handler read; the second evaluation reads
+        // the shadow word — M29 (the first in-handler check deleted) drops this to 1
+        assertEquals(2, calls, "verified evaluations");
         for (int i = 1; i <= calls; i++) {
             source.reopen();
             source.verify();
@@ -460,6 +469,20 @@ final class TransferFaultTest {
             } finally {
                 Fault.reset();
             }
+        }
+        // the shadow-word evaluation stands alone: faulted, it must not output either
+        source.reopen();
+        source.verify();
+        assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw(), "re-arm shadow");
+        try {
+            Fault.arm("Session.verifiedShadow", 1, Const.VERIFIED_NO);
+            int sw = source.inner(INS_EXPORT, 1, Vecs.accessHashNew()).sw();
+            assertNotEquals(0x9000, sw, "verifiedShadow eval must not output");
+            assertTrue(
+                    sw == 0x6F00 || sw == 0x6982,
+                    "verifiedShadow eval: " + Integer.toHexString(sw));
+        } finally {
+            Fault.reset();
         }
     }
 
@@ -876,7 +899,7 @@ final class TransferFaultTest {
         Side source = loaded(target);
         byte[] data = concat(target.cert, target.offer());
         assertEquals(
-                13,
+                15,
                 measure(source, INS_EXPORT, 0, data, "Bytes.equal"),
                 "Bytes.equal evaluations of EXPORT P1=00");
         int c = memberCount(source);
@@ -927,7 +950,7 @@ final class TransferFaultTest {
         Side target = loadedTarget(source);
         byte[] data = concat(source.cert, export(source, target)[0]);
         assertEquals(
-                14,
+                16,
                 measure(target, INS_IMPORT, 0, data, "Bytes.equal"),
                 "Bytes.equal evaluations of IMPORT P1=00");
         int c = memberCount(target);
@@ -955,21 +978,30 @@ final class TransferFaultTest {
         byte[] data = concat(target.cert, target.offer());
         assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw());
         int calls = measure(source, INS_EXPORT, 1, Vecs.accessHashNew(), "Session.pending");
-        assertEquals(2, calls, "pending evaluations");
-        for (int i = 1; i <= calls; i++) {
-            source.reopen();
-            source.verify();
-            assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw(), "re-arm " + i);
-            try {
-                Fault.arm("Session.pending", i, Const.PENDING_IMPORT);
-                int sw = source.inner(INS_EXPORT, 1, Vecs.accessHashNew()).sw();
-                assertNotEquals(0x9000, sw, "pending eval " + i + " must not output");
-                assertEquals(i == 1 ? 0x6985 : 0x6F00, sw, "pending eval " + i);
-            } finally {
-                Fault.reset();
-            }
+        // the gate reads the pending word once; the re-read before the payload is
+        // encrypted is on the shadow word — a different call
+        assertEquals(1, calls, "pending evaluations");
+        source.reopen();
+        source.verify();
+        assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw(), "re-arm gate");
+        try {
+            Fault.arm("Session.pending", 1, Const.PENDING_IMPORT);
+            int sw = source.inner(INS_EXPORT, 1, Vecs.accessHashNew()).sw();
+            assertEquals(0x6985, sw, "pending gate eval");
+        } finally {
+            Fault.reset();
         }
-        // the 6F00 of eval 2 ended the pending export and tore the session
+        source.reopen();
+        source.verify();
+        assertEquals(0x9000, source.inner(INS_EXPORT, 0, data).sw(), "re-arm shadow");
+        try {
+            Fault.arm("Session.pendingExportShadow", 1, Const.PENDING_IMPORT);
+            int sw = source.inner(INS_EXPORT, 1, Vecs.accessHashNew()).sw();
+            assertEquals(0x6F00, sw, "pending shadow eval");
+        } finally {
+            Fault.reset();
+        }
+        // the 6F00 of the shadow eval ended the pending export and tore the session
         assertEquals(0, pending(source), "pending export left");
     }
 
