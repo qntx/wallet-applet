@@ -26,6 +26,17 @@ The CAP build is reproducible (fixed timestamps, sorted inputs; CI builds it twi
 SHA-256). Dependency versions are pinned in `gradle/libs.versions.toml` and
 `spec/vectors/gen/ts/bun.lock`; GitHub Actions are pinned by commit.
 
+The Java Card converter comes from the git submodule `martinpaljak/oracle_javacard_sdks`
+pinned by commit (SHA-1), and every file of the `jc320v26.0_kit` the converter and its Ant
+task use is verified against the SHA-256 recorded in `gradle/jcdk-sha256.txt` before any CAP
+converts; the hashes were recorded at first use from that commit (trust on first use), so a
+substituted or tampered toolchain file fails the build, but the pin cannot detect a toolchain
+that was wrong at the pinned commit. For the same reason the reproducible-build check compares
+two builds made with the *same* toolchain — it does not detect a substituted toolchain.
+Every Gradle dependency hash is trust-on-first-use and signatures are not verified; the JDK
+(`actions/setup-java` in CI, toolchain resolution locally) is not verified by hash. The REUSE
+lint image in CI is pinned by multi-arch digest (`fsfe/reuse:6.3.0@sha256:2748d04c…`).
+
 Every Gradle artifact resolved from Maven Central, the Gradle plugin portal or the third-party
 repository `mvn.javacard.pro` (which serves the `com.github.martinpaljak` group: ant-javacard,
 GlobalPlatformPro and apdu4j) is checked against the SHA-256 recorded in
