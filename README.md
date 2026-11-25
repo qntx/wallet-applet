@@ -170,8 +170,11 @@ per-row `*.json`/`*.bin` reports (`init.json`, `install-journal.json`, `commit-c
 `rng.json`, `memory.json`, `timing.json`/`timing.md`, `signatures.json`,
 `primitives.json`/`primitives.md`), which feed the batch
 record of §10. A run with a reader also writes `record.txt` (the `realCardRecord` task
-finalizes `realCard`): one `PASS`/`FAIL`/`SKIP` line per test class plus the timing table. It
-is copied to [`realcard/<cap-sha256>.txt`](realcard/) and committed before a release tag —
+finalizes `realCard`, and only on a clean `tests/` + `applet/` tree with every input file
+stamped by that run): the `qntx-card real-card record 2` format — CAP sha256, the `tests/` and
+`applet/` git trees, ATR/CPLC/IDENTIFY, totals and one `PASS`/`FAIL`/`SKIP` line per
+`suite.txt` class — then the timing table. It is copied to
+[`realcard/<cap-sha256>.txt`](realcard/) and committed before a release tag —
 `release.yml` refuses the tag without it.
 
 Without `-PrealCard` every test still skips as "not run"; the table below is the suite's own
@@ -298,8 +301,10 @@ job calls `ci.yml` as a workflow — REUSE lint, Spotless, build + all tests, th
 differential, reproducible CAP and card-sim, PIT, the SBOM, `dist` and both vector generators
 must pass on the tagged commit. Then the `release` job checks the tag equals the version,
 refuses the tag unless a committed real-card record
-[`realcard/<cap-sha256>.txt`](realcard/) exists for this CAP hash with `failed 0` and
-`InstallRealCardTest` passing, rebuilds `build/dist/` with toolchain auto-download off (the
+[`realcard/<cap-sha256>.txt`](realcard/) passes `./gradlew :tests:checkRealCardRecord`:
+the record's `cap` is the released CAP's sha256, its `tree-tests`/`tree-applet` are the
+tagged trees, `failed 0`, every `suite.txt` class is PASS or SKIP and
+`InstallRealCardTest` is PASS. It rebuilds `build/dist/` with toolchain auto-download off (the
 JDK comes only from setup-java), proves the rebuilt CAP is byte-identical to the released one,
 verifies `SHA256SUMS`, attests build provenance and publishes a GitHub release:
 

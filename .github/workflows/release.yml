@@ -1,7 +1,8 @@
 # Before tagging, a real-card record for the CAP this tag produces MUST be committed
 # under realcard/<cap-sha256>.txt (the realCardRecord task writes it after a passing
-# ./gradlew :tests:realCard -PrealCard=<reader> run); the release job refuses a tag
-# whose CAP has no passing record.
+# ./gradlew :tests:realCard -PrealCard=<reader> run, in the `record 2` format bound to
+# the run's git trees and files); the release job refuses a tag whose record the
+# :tests:checkRealCardRecord gate rejects.
 name: Release
 
 on:
@@ -48,13 +49,7 @@ jobs:
       - name: Distributables
         run: ./gradlew dist --no-build-cache -Porg.gradle.java.installations.auto-download=false
       - name: Real-card evidence for this CAP
-        run: |
-          cap=$(sha256sum build/dist/qntx-card.cap | cut -d' ' -f1)
-          record="realcard/$cap.txt"
-          test -f "$record" || { echo "::error::no committed real-card record $record"; exit 1; }
-          grep -qx "cap $cap" "$record"
-          grep -qx "failed 0" "$record"
-          grep -qx "PASS org.qntx.card.real.InstallRealCardTest" "$record"
+        run: ./gradlew :tests:checkRealCardRecord --no-build-cache -Porg.gradle.java.installations.auto-download=false
       - name: Reproducible CAP
         run: |
           ./gradlew :applet:cap --rerun-tasks --no-build-cache

@@ -214,7 +214,37 @@ tasks.register<Test>("realCard") {
         providers
             .gradleProperty("realCardProbeCap")
             .orElse(probeCapFile.map { it.asFile.absolutePath })
+    val outDir =
+        providers
+            .gradleProperty("realCardOut")
+            .map { File(it) }
+            .getOrElse(
+                layout.buildDirectory
+                    .dir("realcard")
+                    .get()
+                    .asFile,
+            )
     doFirst {
+        // every file the record reads must come from this run: a non-empty output
+        // directory is refused (never deleted), the run start is stamped for the
+        // record's mtime bound, and stale JUnit XML is removed
+        if (outDir.isDirectory) {
+            val contents = outDir.listFiles()
+            check(contents == null || contents.isEmpty()) {
+                "realCard output directory $outDir is not empty " +
+                    "(${contents?.size ?: 0} entries) — move it aside or pass" +
+                    " -PrealCardOut=<empty dir>; nothing was deleted"
+            }
+        }
+        val xmlDir =
+            reports.junitXml.outputLocation
+                .get()
+                .asFile
+        if (xmlDir.isDirectory) {
+            xmlDir.listFiles()?.forEach { it.deleteRecursively() }
+        }
+        outDir.mkdirs()
+        File(outDir, ".run-start").writeText(Instant.now().toString() + "\n")
         systemProperty("qntx.cap", prodCap.get())
         systemProperty("qntx.memcap", memCap.get())
         systemProperty("qntx.probecap", probeCap.get())
@@ -272,9 +302,13 @@ tasks.register<Test>("realCard") {
 }
 
 // Release evidence (realcard/, release.yml): after a realCard run with a reader, distil
-// the run's JUnit XML into <realCardOut>/record.txt — totals plus one verdict line per
-// test class, then the timing table — for commit as realcard/<cap-sha256>.txt. Without
-// -PrealCard no reader was present and the record must not be written.
+// the run's JUnit XML into <realCardOut>/record.txt in the `qntx-card real-card record 2`
+// format — the CAP and git trees the run bound, the card's identity files, totals, one
+// verdict line per suite.txt class with its skip reasons, then the timing table — for
+// commit as realcard/<cap-sha256>.txt. The task refuses to write a record a checker
+// could accept for anything but this run: the git tree under tests/ and applet/ must be
+// clean and every file it reads must be stamped by this run. Without -PrealCard no
+// reader was present and the record must not be written.
 val realCardRecord by tasks.registering {
     group = "verification"
     description =
@@ -285,12 +319,62 @@ val realCardRecord by tasks.registering {
     val outProp = providers.gradleProperty("realCardOut")
     onlyIf("no reader run: -PrealCard is absent") { readerProp.isPresent }
     doLast {
+        val repoRoot = rootProject.layout.projectDirectory.asFile
+
+        fun git(vararg a: String): String {
+            val p =
+                ProcessBuilder("git", *a)
+                    .directory(repoRoot)
+                    .redirectErrorStream(true)
+                    .start()
+            val out =
+                p.inputStream
+                    .readAllBytes()
+                    .toString(Charsets.UTF_8)
+                    .trim()
+            check(p.waitFor() == 0) { "git ${a.joinToString(" ")} failed: $out" }
+            return out
+        }
+        val dirty = git("status", "--porcelain", "--", "tests", "applet")
+        check(dirty.isEmpty()) {
+            "cannot write the real-card record: the git tree has changes under tests/" +
+                " or applet/:\n$dirty"
+        }
+        val outDir =
+            outProp
+                .map { File(it) }
+                .getOrElse(
+                    layout.buildDirectory
+                        .dir("realcard")
+                        .get()
+                        .asFile,
+                )
+        val startFile = File(outDir, ".run-start")
+        check(startFile.isFile) {
+            "no $startFile — record.txt can only follow a realCard run of this checkout"
+        }
+        val runStart = Instant.parse(startFile.readText().trim())
+        val runStartMs = runStart.toEpochMilli()
+
+        fun fromRun(name: String): File {
+            val f = File(outDir, name)
+            check(f.isFile) { "realCard evidence $f is missing — the run did not complete" }
+            check(f.lastModified() >= runStartMs) {
+                "realCard evidence $f predates the run start $runStart — it is stale"
+            }
+            return f
+        }
         val capFile = capProp.map { File(it) }.getOrElse(cap.get().asFile)
         val capSha =
             MessageDigest
                 .getInstance("SHA-256")
                 .digest(capFile.readBytes())
                 .joinToString("") { "%02x".format(it) }
+        val suite =
+            File(repoRoot, "realcard/suite.txt")
+                .readLines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
         val xmlDir =
             tasks
                 .named("realCard", Test::class)
@@ -304,20 +388,21 @@ val realCardRecord by tasks.registering {
         var passed = 0
         var failed = 0
         var skipped = 0
-        val verdicts = sortedMapOf<String, String>()
-        for (
-        file in
-        checkNotNull(xmlDir.listFiles { f -> f.name.startsWith("TEST-") }).sortedBy {
-            it.name
+        val verdicts = sortedMapOf<String, Pair<String, List<String>>>()
+        val xmlFiles =
+            xmlDir.listFiles { f -> f.name.startsWith("TEST-") && f.name.endsWith(".xml") }
+        check(xmlFiles != null && xmlFiles.isNotEmpty()) {
+            "no JUnit XML in $xmlDir — the realCard run did not complete"
         }
-        ) {
-            val testcases =
-                db
-                    .parse(file)
-                    .getElementsByTagName("testcase")
+        for (file in xmlFiles.sortedBy { it.name }) {
+            check(file.lastModified() >= runStartMs) {
+                "JUnit XML $file predates the run start $runStart — it is stale"
+            }
+            val testcases = db.parse(file).getElementsByTagName("testcase")
             var total = 0
             var bad = 0
             var skip = 0
+            val reasons = mutableListOf<String>()
             for (i in 0 until testcases.length) {
                 val tc = testcases.item(i) as org.w3c.dom.Element
                 total++
@@ -326,8 +411,14 @@ val realCardRecord by tasks.registering {
                     tc.getElementsByTagName("error").length > 0
                 ) {
                     bad++
-                } else if (tc.getElementsByTagName("skipped").length > 0) {
-                    skip++
+                } else {
+                    val skippedNodes = tc.getElementsByTagName("skipped")
+                    if (skippedNodes.length > 0) {
+                        skip++
+                        val node = skippedNodes.item(0) as org.w3c.dom.Element
+                        val why = node.getAttribute("message").ifEmpty { node.textContent }
+                        reasons += "${tc.getAttribute("name")}: ${why.trim()}"
+                    }
                 }
             }
             passed += total - bad - skip
@@ -335,44 +426,96 @@ val realCardRecord by tasks.registering {
             skipped += skip
             val name = file.name.removePrefix("TEST-").removeSuffix(".xml")
             verdicts[name] =
-                if (bad > 0) {
-                    "FAIL"
-                } else if (skip == total) {
-                    "SKIP"
-                } else {
-                    "PASS"
-                }
+                (
+                    if (bad > 0) {
+                        "FAIL"
+                    } else if (skip == total) {
+                        "SKIP"
+                    } else {
+                        "PASS"
+                    }
+                ) to reasons
         }
-        val outDir =
-            outProp
-                .map { File(it) }
-                .getOrElse(
-                    layout.buildDirectory
-                        .dir("realcard")
-                        .get()
-                        .asFile,
-                )
-        outDir.mkdirs()
+        for (name in verdicts.keys) {
+            check(suite.contains(name)) {
+                "test class $name ran but is not in realcard/suite.txt"
+            }
+        }
+        val hex = { f: File -> f.readBytes().joinToString("") { "%02x".format(it) } }
         val record = File(outDir, "record.txt")
         val text =
             buildString {
-                append("qntx-card real-card record\n")
+                append("qntx-card real-card record 2\n")
                 append("cap ").append(capSha).append('\n')
-                append("date ").append(Instant.now().toString()).append('\n')
+                append("commit ").append(git("rev-parse", "HEAD")).append('\n')
+                append("tree-tests ").append(git("rev-parse", "HEAD:tests")).append('\n')
+                append("tree-applet ").append(git("rev-parse", "HEAD:applet")).append('\n')
+                append("date ").append(runStart).append('\n')
                 append("reader ").append(readerProp.get()).append('\n')
+                append("atr ").append(fromRun("atr.txt").readText().trim()).append('\n')
+                append("cplc ").append(hex(fromRun("cplc.bin"))).append('\n')
+                append("identify ").append(hex(fromRun("identify.bin"))).append('\n')
+                append("apdu-log-sha256 ")
+                    .append(
+                        MessageDigest
+                            .getInstance("SHA-256")
+                            .digest(fromRun("apdu.log").readBytes())
+                            .joinToString("") { "%02x".format(it) },
+                    ).append('\n')
+                // a MISSING or FAIL verdict line counts against the record's `failed`
+                var classFailed = 0
+                val classes = StringBuilder()
+                for (name in suite) {
+                    val v = verdicts[name]
+                    val verdict = v?.first ?: "MISSING"
+                    if (verdict != "PASS" && verdict != "SKIP") {
+                        classFailed++
+                    }
+                    classes
+                        .append("class ")
+                        .append(name)
+                        .append(' ')
+                        .append(verdict)
+                        .append('\n')
+                    if (v != null) {
+                        for (r in v.second) {
+                            classes.append("  skip ").append(r).append('\n')
+                        }
+                    }
+                }
                 append("passed ").append(passed).append('\n')
-                append("failed ").append(failed).append('\n')
+                append("failed ").append(failed + classFailed).append('\n')
                 append("skipped ").append(skipped).append('\n')
-                for ((name, verdict) in verdicts) {
-                    append(verdict).append(' ').append(name).append('\n')
-                }
-                val timing = File(outDir, "timing.md")
-                if (timing.isFile) {
-                    append('\n').append(timing.readText())
-                }
+                append(classes)
+                append('\n').append(fromRun("timing.md").readText())
             }
         record.writeText(text)
         println("wrote ${record.absolutePath}")
+    }
+}
+
+// release.yml runs this on the tag: realcard/<sha256 of the released CAP>.txt must prove
+// a passing bound run — the record's cap, git trees, failure count and class lines are
+// checked by org.qntx.card.RealCardCheck.
+tasks.register<JavaExec>("checkRealCardRecord") {
+    group = "verification"
+    description = "Fails unless realcard/<cap-sha256>.txt proves a passing bound run (§10)."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.qntx.card.RealCardCheck")
+    dependsOn(tasks.named("testClasses"))
+    doFirst {
+        // the release job checks the CAP it ships: build/dist wins, the cap task
+        // output is the standalone default
+        val distCap =
+            rootProject.layout.buildDirectory
+                .file("dist/qntx-card.cap")
+                .get()
+                .asFile
+        val capFile = if (distCap.isFile) distCap else cap.get().asFile
+        args(
+            rootProject.layout.projectDirectory.asFile.absolutePath,
+            capFile.absolutePath,
+        )
     }
 }
 

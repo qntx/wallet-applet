@@ -1,0 +1,12 @@
+org.qntx.card.real.AdmissionRealCardTest
+org.qntx.card.real.CoreRealCardTest
+org.qntx.card.real.DifferentialRealCardTest
+org.qntx.card.real.FlowRealCardTest
+org.qntx.card.real.InstallRealCardTest
+org.qntx.card.real.MemoryRealCardTest
+org.qntx.card.real.NvmRealCardTest
+org.qntx.card.real.PrimitiveRealCardTest
+org.qntx.card.real.SignRealCardTest
+org.qntx.card.real.TearingRealCardTest
+org.qntx.card.real.TimingRealCardTest
+org.qntx.card.real.WalletRealCardTest
