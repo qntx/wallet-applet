@@ -7,8 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.bouncycastle.asn1.sec.SECNamedCurves;
 import org.bouncycastle.asn1.x9.X9ECParameters;
 import org.bouncycastle.math.ec.ECPoint;
@@ -63,6 +67,36 @@ final class PeerSlotInitTest {
                 "PEER_INIT does not match the independent derivation");
         assertFalse(
                 Arrays.equals(Secp256k1.G, Secp256k1.PEER_INIT), "PEER_INIT is the base point G");
+    }
+
+    /**
+     * The {@code P_init} hex block of spec/protocol.md §16.1 item 1 must be {@link
+     * Secp256k1#PEER_INIT}: the spec is normative, so a drift between the documented point and the
+     * coded point is a bug in both.
+     */
+    @Test
+    void peerInitMatchesSpecBlock() throws Exception {
+        Path spec =
+                Path.of(System.getProperty("qntx.vectors", "spec/vectors"))
+                        .getParent()
+                        .resolve("protocol.md");
+        String text = Files.readString(spec);
+        int item1 = text.indexOf("`P_init = (x, y)`");
+        assertFalse(item1 < 0, "spec/protocol.md §16.1 item 1 does not define P_init");
+        Matcher m =
+                Pattern.compile("```\\s*([0-9a-f]+)\\s*([0-9a-f]+)\\s*([0-9a-f]+)\\s*```")
+                        .matcher(text);
+        assertFalse(!m.find(item1), "no hex block after the P_init definition");
+        String hex = m.group(1) + m.group(2) + m.group(3);
+        byte[] parsed = new byte[hex.length() / 2];
+        for (int i = 0; i < parsed.length; i++) {
+            parsed[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
+        }
+        assertEquals(65, parsed.length, "the spec block is not a 65-byte uncompressed point");
+        assertArrayEquals(
+                Secp256k1.PEER_INIT,
+                parsed,
+                "the P_init hex block of §16.1 item 1 differs from Secp256k1.PEER_INIT");
     }
 
     @Test
