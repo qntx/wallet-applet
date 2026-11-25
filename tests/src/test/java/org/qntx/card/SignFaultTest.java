@@ -246,7 +246,10 @@ final class SignFaultTest {
                                             Vecs.message(), Vecs.tweakBip86(), Vecs.pathSecpEvm())
                                     : Vecs.pathEdSolana();
             // fool the dispatch gate alone: the handler's own first eval still reads NO
+            // and refuses before the shadow word is even read (§16.2 item 4)
             unverified();
+            int before = edCounter();
+            Fault.countCalls();
             Fault.arm("Session.verified", 1, Const.VERIFIED_YES);
             Response r = inner(ins, 0, data);
             int writes = card.writes();
@@ -255,6 +258,12 @@ final class SignFaultTest {
                     ins == 0x31 ? 1 : 0,
                     writes,
                     "only the ECDSA setW may persist, INS " + Integer.toHexString(ins));
+            assertEquals(before, edCounter(), "edCounter unchanged");
+            assertEquals(
+                    0,
+                    Fault.calls("Session.verifiedShadow"),
+                    "the first handler evaluation refused alone, before the shadow read, INS "
+                            + Integer.toHexString(ins));
             // force each single one of the two second-level evaluations
             unverified();
             Fault.arm("Session.verified", 1, Const.VERIFIED_YES);

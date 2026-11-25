@@ -233,6 +233,31 @@ final class TransferFaultTest {
         }
     }
 
+    /**
+     * {@code Identity.identity} writes A_S into {@code h[H_A]} once per evaluation — at {@code
+     * Transfer.import0}'s member-identity check (eval 1, Transfer.java:288) and again before {@code
+     * sig_S}'s recomputed TH (eval 2, Transfer.java:331, §16.2 item 4). A successful IMPORT P1=00
+     * measures 4 calls: the session transcript adds one read per direction (Session.java:150) on
+     * top of the two evaluations. A BLANK target has no session identity yet and measures exactly
+     * the 2 evaluation reads (its member check is skipped, not its identity reads). Removing eval
+     * 2's call drops either count by one.
+     */
+    @Test
+    void import0IdentityRecomputedInBothEvaluations() throws Exception {
+        Side source = new Side();
+        Side target = loadedTarget(source);
+        byte[] data = concat(source.cert, export(source, target)[0]);
+        int calls = measure(target, INS_IMPORT, 0, data, "Identity.identity");
+        assertEquals(4, calls, "identity reads in both evaluations + the session MACs, LOADED");
+        target.reopen();
+
+        Side blank = new Side();
+        Side bsource = loaded(blank);
+        byte[] blankData = concat(bsource.cert, export(bsource, blank)[0]);
+        calls = measure(blank, INS_IMPORT, 0, blankData, "Identity.identity");
+        assertEquals(2, calls, "identity reads in both evaluations, BLANK");
+    }
+
     // ── IMPORT1 ─────────────────────────────────────────────────────────────
 
     /** Arms a pending import of a genuine export on {@code target} (LOADED, offered). */
