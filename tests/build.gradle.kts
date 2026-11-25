@@ -398,7 +398,11 @@ tasks.test {
         // (B2's gateSweep task weaves it; B3's persistent faults also arm call sites)
         listOf("-javaagent:${agent.singleFile.absolutePath}=org/qntx/card")
     }
-    filter { excludeTestsMatching("org.qntx.card.GateSweepTest") }
+    filter {
+        excludeTestsMatching("org.qntx.card.GateSweepTest")
+        // the predicate self-checks inject deliberate releases; they belong to gateSweep
+        excludeTestsMatching("org.qntx.card.GateSweepPredicateTest")
+    }
     systemProperty("qntx.cap", cap.get().asFile.absolutePath)
     systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
     // heavy acceptance counts are settable from the daemon command line
@@ -455,6 +459,7 @@ val gateSweep by tasks.registering(Test::class) {
         // in the unwoven `test` task
         includeTestsMatching("org.qntx.card.GateSweepTest")
         includeTestsMatching("org.qntx.card.ReviewMutantTest")
+        includeTestsMatching("org.qntx.card.GateSweepPredicateTest")
     }
     testLogging {
         events("failed", "passed")
@@ -541,6 +546,7 @@ pitest {
             // re-runs whole attack scenarios per instruction site and kills nothing PIT
             // needs; it is the mutation gate's sweep, not a mutation target
             "org.qntx.card.GateSweepTest",
+            "org.qntx.card.GateSweepPredicateTest",
         )
     mutators = listOf("STRONGER")
     excludedMethods =

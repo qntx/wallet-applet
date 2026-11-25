@@ -38,16 +38,16 @@ import org.qntx.card.tests.Vecs;
  * plus a {@code summary.csv} land in {@code <reports>/gate-sweep/}.
  */
 final class GateSweepTest {
-    private static final int INS_STATUS = 0x20;
+    static final int INS_STATUS = 0x20;
     private static final int INS_CREATE = 0x21;
-    private static final int INS_VERIFY = 0x22;
-    private static final int INS_CHANGE = 0x23;
-    private static final int INS_ERASE = 0x24;
+    static final int INS_VERIFY = 0x22;
+    static final int INS_CHANGE = 0x23;
+    static final int INS_ERASE = 0x24;
     private static final int INS_WAIT = 0x25;
-    private static final int INS_PUBLIC_KEY = 0x30;
-    private static final int INS_SIGN_ECDSA = 0x31;
-    private static final int INS_SIGN_BIP340 = 0x32;
-    private static final int INS_SIGN_ED25519 = 0x33;
+    static final int INS_PUBLIC_KEY = 0x30;
+    static final int INS_SIGN_ECDSA = 0x31;
+    static final int INS_SIGN_BIP340 = 0x32;
+    static final int INS_SIGN_ED25519 = 0x33;
     private static final int INS_OFFER = 0x40;
     private static final int INS_EXPORT = 0x41;
     private static final int INS_IMPORT = 0x42;
@@ -77,7 +77,7 @@ final class GateSweepTest {
                     "WalletApplet",
                     "Wei25519");
 
-    private static final byte[] EMPTY = new byte[0];
+    static final byte[] EMPTY = new byte[0];
     private static final byte[] PATH5 = {0x01, 0, 0, 0, 0};
     private static final byte[] RNG_BLOCK = new byte[256];
     private static final byte[] ATTACKER_SEED =
@@ -85,7 +85,7 @@ final class GateSweepTest {
     private static final byte[] ATTACKER_ACCESS =
             Crypto.sha256("qntx-sweep/attacker code".getBytes());
     // the second SX variant signs with this arbitrary known scalar instead of 1
-    private static final BigInteger KNOWN_K = new BigInteger("5192296858534827628530496329220097");
+    static final BigInteger KNOWN_K = new BigInteger("5192296858534827628530496329220097");
 
     /**
      * Every coded result a woven short call is forced to, plus plain 0 and 1. The shadow codewords
@@ -127,7 +127,7 @@ final class GateSweepTest {
      * One attack attempt on a fresh card: {@link #run} sends the APDUs, {@link #released} checks
      * the protected effect afterwards, {@link #sws} records every SW for the CSV.
      */
-    private abstract static class Run {
+    abstract static class Run {
         final List<Integer> sws = new ArrayList<>();
         Throwable threw;
 
@@ -149,11 +149,11 @@ final class GateSweepTest {
         }
     }
 
-    private interface Factory {
+    interface Factory {
         Run fresh() throws Exception;
     }
 
-    private record Attempt(boolean released, String sws) {}
+    record Attempt(boolean released, String sws) {}
 
     /** A wrapped command: the SW is recorded; a thrown host-side error records {@code EXC}. */
     private static int cmd(Run r, Card c, Session s, int ins, int p1, byte[] data) {
@@ -244,7 +244,7 @@ final class GateSweepTest {
     // ── scenario factories ───────────────────────────────────────────────────
 
     /** SX: EXPORT to an attacker whose {@code sig_T} is signed under {@code priv} (1 or k). */
-    private static Factory exportToAttacker(BigInteger priv) {
+    static Factory exportToAttacker(BigInteger priv) {
         return () -> {
             EmuMember m = new EmuMember();
             Object[] f = loaded(m);
@@ -285,7 +285,7 @@ final class GateSweepTest {
     }
 
     /** SXn/SXc: EXPORT to a non-member — genuine (ca1) or forged (ca2) certificate. */
-    private static Factory exportToNonMember(EmuMember attacker) {
+    static Factory exportToNonMember(EmuMember attacker) {
         return () -> {
             EmuMember member = new EmuMember();
             Object[] f = loaded(member);
@@ -323,7 +323,17 @@ final class GateSweepTest {
     }
 
     /** SP: EXPORT P1=01 in a verified session with no pending export. */
-    private static Factory exportNoPending() {
+    static Factory exportNoPending() {
+        return exportNoPending(() -> {});
+    }
+
+    /**
+     * SP with a hook run between the successful P1=00 import and the refused P1=01 that ends it.
+     * The predicate self-check arms {@code Session.endPending} skips there: an arm made before
+     * {@code fresh()} is wiped by the {@code Card} constructor's {@code Fault.reset}, so a
+     * setup-side fault has to be injected at this point.
+     */
+    static Factory exportNoPending(Runnable afterImport) {
         return () -> {
             EmuMember m = new EmuMember();
             Object[] f = loaded(m);
@@ -343,6 +353,7 @@ final class GateSweepTest {
                     0x9000,
                     Vecs.roundtrip(card, session, INS_IMPORT, 0, 0, head[0]).sw(),
                     "IMPORT0");
+            afterImport.run();
             // a refused P1=01 ends the pending import — the keys it leaves are the
             // candidate set: {zeros, the import keys the attacker knows}
             Vecs.roundtrip(card, session, INS_IMPORT, 1, 0, new byte[160]);
@@ -367,7 +378,7 @@ final class GateSweepTest {
     }
 
     /** SI: BLANK target, genuine cert_S, attacker E and sig_S under {@code priv}. */
-    private static Factory importAttackerSeed(BigInteger priv) {
+    static Factory importAttackerSeed(BigInteger priv) {
         return () -> {
             Rng.fix(RNG_BLOCK);
             EmuMember source = new EmuMember();
@@ -411,7 +422,7 @@ final class GateSweepTest {
     }
 
     /** SIr: LOADED target, genuine member sender whose record carries a different wallet. */
-    private static Factory importDifferentWallet() {
+    static Factory importDifferentWallet() {
         return () -> {
             EmuMember s = new EmuMember();
             EmuMember extra = new EmuMember();
@@ -452,7 +463,7 @@ final class GateSweepTest {
     }
 
     /** SIm: a genuine pending import whose ct ‖ tag is replaced by a zero-key record. */
-    private static Factory importZeroKeyRecord() {
+    static Factory importZeroKeyRecord() {
         return () -> {
             EmuMember s = new EmuMember();
             Object[] f = loaded(s);
@@ -485,7 +496,7 @@ final class GateSweepTest {
     }
 
     /** SV: VERIFY of a wrong code at {@code fails}; the required waits are done first. */
-    private static Factory verifyWrong(int fails, int waits) {
+    static Factory verifyWrong(int fails, int waits) {
         return () -> {
             Object[] f = loaded(new EmuMember());
             Card card = (Card) f[0];
@@ -528,7 +539,7 @@ final class GateSweepTest {
      * skipped inner() dispatch returns 9000 without applying the effect; the release is the stored
      * ct/tag/wrap or life actually changing.
      */
-    private static Factory unverifiedEffect(int ins, byte[] data) {
+    static Factory unverifiedEffect(int ins, byte[] data) {
         return () -> {
             Object[] f = loaded(new EmuMember());
             Card card = (Card) f[0];
@@ -548,7 +559,7 @@ final class GateSweepTest {
     }
 
     /** SS: an unverified PUBLIC_KEY / SIGN_* command (+ ED25519 finish) — 9000 with data. */
-    private static Factory unverifiedSign(int[][] commands) {
+    static Factory unverifiedSign(int[][] commands) {
         return () -> {
             Object[] f = loaded(new EmuMember());
             Card card = (Card) f[0];
@@ -602,7 +613,7 @@ final class GateSweepTest {
 
     // ── the sweep engine ─────────────────────────────────────────────────────
 
-    private static Run once(Factory f) {
+    static Run once(Factory f) {
         try {
             return f.fresh();
         } catch (Exception e) {
@@ -610,7 +621,7 @@ final class GateSweepTest {
         }
     }
 
-    private static Attempt attempt(Factory f, Runnable arm) {
+    static Attempt attempt(Factory f, Runnable arm) {
         Run r = once(f);
         arm.run();
         try {
