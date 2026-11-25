@@ -588,7 +588,7 @@ val gateSweep by tasks.registering(Test::class) {
             .asFile.absolutePath,
     )
     jvmArgumentProviders.add {
-        listOf("-javaagent:${agent.singleFile.absolutePath}=org/qntx/card,sites")
+        listOf("-javaagent:${agent.singleFile.absolutePath}=org/qntx/card;sites")
     }
     systemProperty("qntx.cap", cap.get().asFile.absolutePath)
     systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
@@ -667,7 +667,7 @@ pitest {
     jvmArgs =
         provider {
             listOf(
-                "-javaagent:${agent.singleFile.absolutePath}=org/qntx/card,sites",
+                "-javaagent:${agent.singleFile.absolutePath}=org/qntx/card;sites",
                 "-Dqntx.cap=${cap.get().asFile.absolutePath}",
                 "-Dqntx.vectors=${rootProject.file("spec/vectors").absolutePath}",
                 "-Dqntx.reports=${layout.buildDirectory.dir("reports").get().asFile.absolutePath}",
@@ -692,6 +692,10 @@ pitest {
             // needs; it is the mutation gate's sweep, not a mutation target
             "org.qntx.card.GateSweepTest",
             "org.qntx.card.GateSweepPredicateTest",
+            // arms faults at numbered instruction sites; PIT's coverage probes insert
+            // invokes that shift the numbering, so the armed sites miss — the mutant
+            // assertions still run under gateSweep where the weaving is ours alone
+            "org.qntx.card.ReviewMutantTest",
         )
     mutators = listOf("STRONGER")
     excludedMethods =

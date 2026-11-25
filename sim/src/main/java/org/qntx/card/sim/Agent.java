@@ -41,8 +41,10 @@ import java.util.Set;
 
 /**
  * Java agent that weaves persistent-memory hooks into applet bytecode (architecture spec section 8,
- * patch 5). It runs on {@code -javaagent} with a comma-separated list of instrumented package
- * names, e.g. {@code -javaagent:sim-agent.jar=org/qntx/card/sim/probe}.
+ * patch 5). It runs on {@code -javaagent} with a semicolon-separated list of instrumented package
+ * names, e.g. {@code -javaagent:sim-agent.jar=org/qntx/card/sim/probe}. A comma would survive
+ * everywhere except the PIT launcher, which serializes JVM args comma-separated and splits a
+ * literal one back out as a bogus class name.
  *
  * <p>Per instrumented class it registers fresh arrays with {@link Nvm#trackArray} so only
  * applet-allocated arrays count as persistent targets, replaces {@code bastore}/{@code sastore},
@@ -78,7 +80,7 @@ public final class Agent {
         if (args == null || args.isEmpty()) {
             args = "org/qntx/card";
         }
-        Set<String> packages = new HashSet<>(Arrays.asList(args.split(",")));
+        Set<String> packages = new HashSet<>(Arrays.asList(args.split(";")));
         sites = packages.remove("sites");
         inst.addTransformer(new AppletTransformer(packages, sites));
         installed = true;

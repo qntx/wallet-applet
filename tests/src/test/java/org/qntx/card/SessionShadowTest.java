@@ -4,7 +4,9 @@ package org.qntx.card;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import javacard.framework.ISOException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.qntx.card.host.Response;
@@ -208,5 +210,71 @@ final class SessionShadowTest {
         byte[] w3 = words(c2);
         assertEquals(0, w3[p] | w3[p + 1], "pending word A not ended");
         assertEquals(0, w3[ps] | w3[ps + 1], "pending shadow word B not ended");
+    }
+
+    /**
+     * {@code verifiedShadow} decoding on every word state, called directly — through an APDU the
+     * caller's own fault check would mask a skipped {@code 6F00}, so the method itself must return
+     * or throw: the member gives {@code VERIFIED_YES}, a blank word {@code VERIFIED_NO}, any other
+     * word {@code SW_FAULT}.
+     */
+    @Test
+    void verifiedShadowDecodesEveryWord() throws Exception {
+        Card card = Vecs.blankSelf();
+        Vecs.open(card);
+        org.qntx.card.Session s = Internals.session(card.applet(Spec.WALLET_AID));
+        byte[] w = words(card);
+        int o = Internals.sessionOffset("O_VERIFIED_SHADOW");
+        for (short v : new short[] {(short) 0, Const.VERIFIED_SHADOW, (short) 0x1234}) {
+            w[o] = (byte) (v >>> 8);
+            w[o + 1] = (byte) v;
+            if (v == Const.VERIFIED_SHADOW) {
+                assertEquals(Const.VERIFIED_YES, s.verifiedShadow(), "member");
+            } else if (v == 0) {
+                assertEquals(Const.VERIFIED_NO, s.verifiedShadow(), "blank");
+            } else {
+                ISOException e = assertThrows(ISOException.class, s::verifiedShadow);
+                assertEquals(Const.SW_FAULT, e.getReason(), "corrupt");
+            }
+        }
+    }
+
+    /**
+     * {@code pendingExportShadow} decoding, same shape as {@link #verifiedShadowDecodesEveryWord}.
+     */
+    @Test
+    void pendingExportShadowDecodesEveryWord() throws Exception {
+        Card card = Vecs.blankSelf();
+        Vecs.open(card);
+        org.qntx.card.Session s = Internals.session(card.applet(Spec.WALLET_AID));
+        byte[] w = words(card);
+        int o = Internals.sessionOffset("O_PENDING_SHADOW");
+        for (short v : new short[] {(short) 0, Const.PENDING_EXPORT_SHADOW, (short) 0x1234}) {
+            w[o] = (byte) (v >>> 8);
+            w[o + 1] = (byte) v;
+            if (v == Const.PENDING_EXPORT_SHADOW) {
+                assertEquals(Const.PENDING_EXPORT, s.pendingExportShadow(), "member");
+            } else if (v == 0) {
+                assertEquals(0, s.pendingExportShadow(), "blank");
+            } else {
+                ISOException e = assertThrows(ISOException.class, s::pendingExportShadow);
+                assertEquals(Const.SW_FAULT, e.getReason(), "corrupt");
+            }
+        }
+    }
+
+    /** {@code clearVerified} must clear both words — dropping either write disagrees the pair. */
+    @Test
+    void clearVerifiedClearsBothWords() throws Exception {
+        Card card = Vecs.blankSelf();
+        Vecs.open(card);
+        org.qntx.card.Session s = Internals.session(card.applet(Spec.WALLET_AID));
+        s.setVerified();
+        s.clearVerified();
+        assertEquals(Const.VERIFIED_NO, s.verified(), "word A after clear");
+        assertEquals(Const.VERIFIED_NO, s.verifiedShadow(), "shadow word after clear");
+        byte[] w = words(card);
+        int vs = Internals.sessionOffset("O_VERIFIED_SHADOW");
+        assertEquals(0, w[vs] | w[vs + 1], "shadow bytes after clear");
     }
 }
