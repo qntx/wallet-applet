@@ -393,7 +393,12 @@ tasks.test {
             .get()
             .asFile.absolutePath,
     )
-    jvmArgumentProviders.add { listOf("-javaagent:${agent.singleFile.absolutePath}") }
+    jvmArgumentProviders.add {
+        // the sites weave costs ~55% wall time: the normal suite runs without it
+        // (B2's gateSweep task weaves it; B3's persistent faults also arm call sites)
+        listOf("-javaagent:${agent.singleFile.absolutePath}=org/qntx/card")
+    }
+    filter { excludeTestsMatching("org.qntx.card.GateSweepTest") }
     systemProperty("qntx.cap", cap.get().asFile.absolutePath)
     systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
     // heavy acceptance counts are settable from the daemon command line
@@ -414,6 +419,51 @@ tasks.test {
     }
     finalizedBy(memoryReport)
 }
+
+val gateSweep by tasks.registering(Test::class) {
+    description =
+        "Single-fault sweep over every gate path: re-runs each attack scenario once per " +
+        "executed branch, invoke and woven result (GateSweepTest)."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform()
+    dependsOn(":applet:cap", ":sim:shadowJar")
+    inputs.file(cap).withPropertyName("cap")
+    inputs.files(agent).withPropertyName("agent")
+    systemProperty(
+        "qntx.simJar",
+        project(":sim")
+            .layout.buildDirectory
+            .file("libs/card-sim.jar")
+            .get()
+            .asFile.absolutePath,
+    )
+    jvmArgumentProviders.add {
+        listOf("-javaagent:${agent.singleFile.absolutePath}=org/qntx/card,sites")
+    }
+    systemProperty("qntx.cap", cap.get().asFile.absolutePath)
+    systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
+    systemProperty(
+        "qntx.reports",
+        layout.buildDirectory
+            .dir("reports")
+            .get()
+            .asFile.absolutePath,
+    )
+    filter {
+        // ReviewMutantTest's persistent site faults need the same weave; it self-skips
+        // in the unwoven `test` task
+        includeTestsMatching("org.qntx.card.GateSweepTest")
+        includeTestsMatching("org.qntx.card.ReviewMutantTest")
+    }
+    testLogging {
+        events("failed", "passed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = true
+    }
+}
+
+tasks.check { dependsOn(gateSweep) }
 
 val memoryReport by tasks.registering {
     description = "Prints the simulator's transient-memory report of the installed applet."
@@ -467,7 +517,7 @@ pitest {
     jvmArgs =
         provider {
             listOf(
-                "-javaagent:${agent.singleFile.absolutePath}",
+                "-javaagent:${agent.singleFile.absolutePath}=org/qntx/card,sites",
                 "-Dqntx.cap=${cap.get().asFile.absolutePath}",
                 "-Dqntx.vectors=${rootProject.file("spec/vectors").absolutePath}",
                 "-Dqntx.reports=${layout.buildDirectory.dir("reports").get().asFile.absolutePath}",
@@ -488,6 +538,9 @@ pitest {
             // drives the separately built card-sim.jar in a child JVM, whose applet classes
             // PIT never mutates, so it cannot kill any mutant and only costs time
             "org.qntx.card.tests.ServerTest",
+            // re-runs whole attack scenarios per instruction site and kills nothing PIT
+            // needs; it is the mutation gate's sweep, not a mutation target
+            "org.qntx.card.GateSweepTest",
         )
     mutators = listOf("STRONGER")
     excludedMethods =

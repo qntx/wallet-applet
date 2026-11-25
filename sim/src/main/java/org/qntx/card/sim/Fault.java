@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package org.qntx.card.sim;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -20,6 +21,13 @@ import javacard.security.CryptoException;
  *
  * <p>Void methods are covered by {@link #armSkip} over the agent's woven guard: the n-th call is
  * skipped entirely. {@link #armStore} faults the value a persistent {@code Util.setShort} writes.
+ *
+ * <p>When the agent runs with the {@code sites} argument, every conditional branch and every invoke
+ * instruction of an instrumented method is guarded by {@link #site}: {@link #armSite} picks the
+ * n-th execution of one site ({@code 0} for every execution) and a mode — {@link #SITE_SKIP} or
+ * {@link #SITE_INVERT} for branches, {@link #SITE_SKIP} for invokes. {@link #armVerifyTrue} forces
+ * the n-th {@code verify}/{@code verifyPreComputedHash} of a wrapped ECDSA engine to return {@code
+ * true} regardless of the signature.
  */
 public final class Fault {
 
@@ -31,14 +39,38 @@ public final class Fault {
         boolean skipping;
     }
 
+    /** {@link #armSite} mode: skip the instruction — branch operands or invoke arguments popped. */
+    public static final int SITE_SKIP = 1;
+
+    /** {@link #armSite} mode: run the negated branch to the same target (branches only). */
+    public static final int SITE_INVERT = 2;
+
+    /** The {@link #calls} key the ECDSA verify wrapper counts under. */
+    public static final String ECDSA_VERIFY = "ECDSA.verify";
+
+    private static final class SiteSlot {
+        int seen;
+        final int nth;
+        final int mode;
+
+        SiteSlot(int nth, int mode) {
+            this.nth = nth;
+            this.mode = mode;
+        }
+    }
+
     private static final Map<String, Slot> armed = new HashMap<>();
     private static final Map<String, Integer> counts = new HashMap<>();
+    private static final Map<String, SiteSlot> armedSites = new HashMap<>();
+    private static final Map<String, Integer> sites = new HashMap<>();
     private static volatile boolean active;
     private static int storeArmed;
     private static int storeSeen;
     private static short storeValue;
     private static int ecdsaFlipArmed;
     private static int ecdsaCalls;
+    private static int verifyTrueArmed;
+    private static int verifyTrueSeen;
 
     private Fault() {}
 
@@ -112,11 +144,34 @@ public final class Fault {
     }
 
     /**
+     * Arms the n-th execution (counted since arming) of instruction site {@code key} — {@code
+     * "Class.method#b<k>"} or {@code "Class.method#i<k>"} — with {@code mode} ({@link #SITE_SKIP}
+     * or, for branches, {@link #SITE_INVERT}); {@code nth = 0} faults every execution, a persistent
+     * mutant. Only works when the agent runs with the {@code sites} argument.
+     */
+    public static void armSite(String key, int nth, int mode) {
+        armedSites.put(key, new SiteSlot(nth, mode));
+        active = true;
+    }
+
+    /**
+     * Makes the {@code nth} {@code verify}/{@code verifyPreComputedHash} call — counted since
+     * arming across every wrapped {@code ALG_ECDSA_SHA_256} engine — return {@code true} regardless
+     * of the signature: a data fault on the verification result. {@code nth = 0} faults every call.
+     */
+    public static void armVerifyTrue(int nth) {
+        verifyTrueArmed = nth == 0 ? -1 : nth;
+        verifyTrueSeen = 0;
+        active = true;
+    }
+
+    /**
      * Turns call counting on ({@link #calls}) without arming a fault; {@link #reset} turns it off.
      */
     public static void countCalls() {
         armed.clear();
         counts.clear();
+        sites.clear();
         active = true;
     }
 
@@ -125,13 +180,27 @@ public final class Fault {
         return counts.getOrDefault(method, 0);
     }
 
-    /** Disarms every method and clears the call counters. */
+    /** Every woven-call count since {@link #reset} (the map {@link #calls} reads). */
+    public static Map<String, Integer> callCounts() {
+        return Collections.unmodifiableMap(counts);
+    }
+
+    /** Executions of every instruction site since {@link #reset} (agent argument {@code sites}). */
+    public static Map<String, Integer> siteCounts() {
+        return Collections.unmodifiableMap(sites);
+    }
+
+    /** Disarms every method and site and clears the call and site counters. */
     public static void reset() {
         armed.clear();
         counts.clear();
+        armedSites.clear();
+        sites.clear();
         active = false;
         storeArmed = 0;
         ecdsaFlipArmed = 0;
+        verifyTrueArmed = 0;
+        verifyTrueSeen = 0;
     }
 
     /**
@@ -168,6 +237,42 @@ public final class Fault {
             return storeValue;
         }
         return value;
+    }
+
+    /**
+     * The woven guard of an instruction site: {@code 0} normal, {@link #SITE_SKIP} or {@link
+     * #SITE_INVERT} on the armed occurrence. Counts the execution whenever Fault is active; the
+     * unwoven fast path is one volatile read.
+     */
+    public static int site(String key) {
+        if (!active) {
+            return 0;
+        }
+        sites.merge(key, 1, Integer::sum);
+        SiteSlot s = armedSites.get(key);
+        if (s == null) {
+            return 0;
+        }
+        if (s.nth == 0) {
+            return s.mode;
+        }
+        return ++s.seen == s.nth ? s.mode : 0;
+    }
+
+    /**
+     * The {@link FlippingSignature} verify hook: {@code true} when this {@code verify}/{@code
+     * verifyPreComputedHash} call is armed to succeed regardless — counted under {@link
+     * #ECDSA_VERIFY} so a counting run enumerates the verify occurrences.
+     */
+    static boolean verifyTrue() {
+        if (!active) {
+            return false;
+        }
+        counts.merge(ECDSA_VERIFY, 1, Integer::sum);
+        if (verifyTrueArmed == -1) {
+            return true;
+        }
+        return verifyTrueArmed > 0 && ++verifyTrueSeen == verifyTrueArmed;
     }
 
     /** The woven entry point: the untouched result normally, the armed fault on the n-th call. */
