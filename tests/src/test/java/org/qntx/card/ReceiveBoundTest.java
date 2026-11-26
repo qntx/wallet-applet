@@ -27,8 +27,9 @@ final class ReceiveBoundTest {
 
     /**
      * {@code receiveBytes} forced to return 0 on every call (site {@code i4} skip, {@code nth = 0})
-     * after {@code setIncomingAndReceive} delivered only a chunk: the loop exits after at most
-     * {@code lc} calls with {@code 6F00}. Before the bound the same fault spun forever.
+     * after {@code setIncomingAndReceive} delivered only a chunk: the loop exits after
+     * {@code MAX_RECEIVE_CALLS = 255} calls with {@code 6F00} (the faulted lc is not
+     * trusted: short APDUs cap at 255). Before the bound the same fault spun forever.
      */
     @Test
     void receiveZeroReturnIsBounded() throws Exception {

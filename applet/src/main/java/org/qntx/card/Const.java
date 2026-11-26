@@ -16,6 +16,9 @@ final class Const {
     /** §13: internal error or detected fault (ISO7816 has no constant for it). */
     static final short SW_FAULT = (short) 0x6F00;
 
+    /** §3: short-APDU Lc is at most 255 — the receive loop may never need more calls. */
+    static final short MAX_RECEIVE_CALLS = 255;
+
     /** §13.2: the failure limit was reached and the wallet was erased (ISO7816 6983). */
     static final short SW_ERASED = (short) 0x6983;
 

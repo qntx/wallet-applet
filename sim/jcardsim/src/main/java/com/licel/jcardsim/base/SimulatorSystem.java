@@ -54,6 +54,18 @@ public class SimulatorSystem {
      */
     public static short receiveChunk;
 
+    /**
+     * Calls <code>APDU.receiveBytes</code> made since the current command started
+     * (reset by CardRuntime.startCommand); tests read it to prove the receive loop ran.
+     */
+    public static short receiveCalls;
+
+    /**
+     * Sim-only switch: <code>APDU.receiveBytes</code> always returns 0 — a transport
+     * that delivers nothing (G-07 / §16.3).
+     */
+    public static boolean receiveStall;
+
 
     /**
      * the default instance. Used by <code>Simulator</code>

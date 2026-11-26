@@ -303,6 +303,11 @@ public class APDUProxy {
         if (bOff < 0 || remainingBytes >= 1 && (bOff + 1) > buffer.length) {
             APDUException.throwIt(APDUException.BUFFER_BOUNDS);
         }
+        SimulatorSystem.receiveCalls++;
+        if (SimulatorSystem.receiveStall) {
+            ramVars[CURRENT_STATE] = javacard.framework.APDU.STATE_FULL_INCOMING;
+            return 0;
+        }
         short pre = (short) (ramVars[PRE_READ_LENGTH] & 0xff);
         if (pre != 0) {
             ramVars[PRE_READ_LENGTH] = 0;

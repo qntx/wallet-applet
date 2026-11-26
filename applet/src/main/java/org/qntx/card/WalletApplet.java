@@ -445,11 +445,11 @@ public final class WalletApplet extends Applet {
     private static short receiveAll(APDU apdu) {
         short received = apdu.setIncomingAndReceive();
         short lc = apdu.getIncomingLength();
-        // every receiveBytes call delivers at least one byte: lc bounds the loop (§16.3).
-        // lc ≤ 255 (short APDUs, §3), so a delivery stuck at 0 ends after at most lc
-        // calls with 6F00 instead of spinning until the field drops
+        // every receiveBytes call delivers at least one byte: the loop needs at most lc
+        // calls, and lc ≤ 255 (short APDUs, §3) — a faulted lc or a delivery stuck at 0
+        // ends after MAX_RECEIVE_CALLS calls with 6F00 (§16.3)
         for (short calls = 0; received < lc; calls++) {
-            if (calls == lc) {
+            if (calls == Const.MAX_RECEIVE_CALLS) {
                 ISOException.throwIt(Const.SW_FAULT);
             }
             received += apdu.receiveBytes((short) (ISO7816.OFFSET_CDATA + received));

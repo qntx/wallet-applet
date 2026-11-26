@@ -24,6 +24,28 @@ final class ChunkedReceiveTest {
         Fault.reset();
     }
 
+    /**
+     * A delivery that never produces bytes: {@code receiveAll}'s {@code calls == 255} bound ends
+     * the command with {@code 6F00} instead of spinning — the PIT-visible twin of {@link
+     * ReceiveBoundTest} (which arms the instruction site under {@code gateSweep}).
+     */
+    @Test
+    void stalledReceiveIsBounded() throws Exception {
+        Card card = Vecs.factory();
+        byte[] a = Vecs.cardA(card);
+        Vecs.blankFor(card, a);
+        card.receiveStall(true);
+        try {
+            byte[] rapdu =
+                    card.transmit(org.qntx.card.host.Open.request(Vecs.RND).apdu());
+            int sw =
+                    ((rapdu[rapdu.length - 2] & 0xFF) << 8) | (rapdu[rapdu.length - 1] & 0xFF);
+            assertEquals(0x6F00, sw, "a stalled receive must fault, not spin");
+        } finally {
+            card.receiveStall(false);
+        }
+    }
+
     /** Chunked delivery of a 65-byte OPEN body and a CREATE body still lands each command. */
     @Test
     void chunkedReceiveAssembles() throws Exception {

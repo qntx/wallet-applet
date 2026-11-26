@@ -105,6 +105,19 @@ public final class Card {
         runtime.receiveChunk(n);
     }
 
+    /**
+     * Sim switch: {@code APDU.receiveBytes} returns 0 from the next command on — a transport
+     * that delivers nothing (§16.3); the applet's bounded receive loop must end in 6F00.
+     */
+    public void receiveStall(boolean stall) {
+        runtime.receiveStall(stall);
+    }
+
+    /** {@code APDU.receiveBytes} calls the last command made. */
+    public int receiveCalls() {
+        return runtime.receiveCalls();
+    }
+
     /** Power cycle: clears reset/deselect transient state and selection. */
     public void powerCycle() {
         runtime.reset();
