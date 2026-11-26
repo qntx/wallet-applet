@@ -43,6 +43,7 @@ final class ComparisonFaultTest {
     private static final String EQUAL = "Bytes.equal";
     private static final String ISZERO = "Bytes.isZero";
     private static final String INRANGE = "Secp256k1.inRange";
+    private static final String AGREE = "Secp256k1.agree";
 
     @AfterEach
     void disarm() {
@@ -107,7 +108,9 @@ final class ComparisonFaultTest {
         void run() throws Exception;
     }
 
-    /** SW of an armed run: {@code 6F00} whether the card answered it or the fault tore the session. */
+    /**
+     * SW of an armed run: {@code 6F00} whether the card answered it or the fault tore the session.
+     */
     private static int sw(ThrowingIntSupplier r) throws Exception {
         try {
             return r.get();
@@ -127,6 +130,23 @@ final class ComparisonFaultTest {
                 ((rapdu[rapdu.length - 2] & 0xFF) << 8) | (rapdu[rapdu.length - 1] & 0xFF));
     }
 
+    /**
+     * Arms every call of {@code method} in turn and records the resulting status word; the map is
+     * asserted literally so a removed guard — which makes its own armed call a no-op — shifts the
+     * refusing indices and fails.
+     */
+    private static java.util.Map<Integer, Integer> sws(
+            String method, int occurrences, short value, ThrowingIntSupplier command)
+            throws Exception {
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
+        for (int n = 1; n <= occurrences; n++) {
+            Fault.arm(method, n, value);
+            map.put(n, sw(command));
+            Fault.reset();
+        }
+        return map;
+    }
+
     // ── Session.open: the second scalar check and the two key comparisons ────
 
     @Test
@@ -135,8 +155,8 @@ final class ComparisonFaultTest {
         byte[] a = Vecs.cardA(card);
         Vecs.blankFor(card, a);
         int n = calls(INRANGE, () -> assertEquals(0x9000, open(card).sw()));
-        Fault.arm(INRANGE, n, Const.CHECK_FAIL);
-        assertEquals(0x6F00, open(card).sw(), "forced inRange CHECK_FAIL");
+        java.util.Map<Integer, Integer> map = sws(INRANGE, n, Const.CHECK_FAIL, () -> open(card).sw());
+        assertEquals("{1=28416, 2=28416, 3=28416}", map.toString(), "open inRange");
     }
 
     @Test
@@ -145,11 +165,8 @@ final class ComparisonFaultTest {
         byte[] a = Vecs.cardA(card);
         Vecs.blankFor(card, a);
         int t = calls(EQUAL, () -> assertEquals(0x9000, open(card).sw()));
-        for (int n : new int[] {t - 1, t}) {
-            Fault.arm(EQUAL, n, Const.CHECK_FAIL);
-            assertEquals(0x6F00, open(card).sw(), "forced Bytes.equal " + n + "/" + t);
-            Fault.reset();
-        }
+        java.util.Map<Integer, Integer> map = sws(EQUAL, t, Const.CHECK_FAIL, () -> open(card).sw());
+        assertEquals("{1=28416, 2=28416}", map.toString(), "open equal");
     }
 
     // ── CREATE: zero checks and staged copies ────────────────────────────────
@@ -172,24 +189,19 @@ final class ComparisonFaultTest {
                                         0x9000,
                                         Vecs.roundtrip(card, session, INS_CREATE, 0, 0, data)
                                                 .sw()));
-        int faults = 0;
+        // a CREATE can only run on a BLANK card: fresh one per armed run, built unfaulted so
+        // the setup's own isZero calls do not consume the armed index
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
         for (int n = 1; n <= z; n++) {
-            // a CREATE can only run on a BLANK card: fresh one per armed run
             Card c2 = Vecs.factory();
             Vecs.blankFor(c2, Vecs.cardA(c2));
             Session s2 = Vecs.open(c2);
             Fault.arm(ISZERO, n, Const.CHECK_OK);
-            int sw = sw(() -> Vecs.roundtrip(c2, s2, INS_CREATE, 0, 0, data).sw());
+            map.put(n, sw(() -> Vecs.roundtrip(c2, s2, INS_CREATE, 0, 0, data).sw()));
             Fault.reset();
-            if (sw == 0x6F00) {
-                faults++;
-            }
         }
         // the drawn T's zero check in the draw loop and the seed's after it (§9.4, §16.2 item 4)
-        assertTrue(
-                faults >= 2,
-                "expected at least two refusing Bytes.isZero evaluations of CREATE P1=00, got "
-                        + faults);
+        assertEquals("{1=28416, 2=36864, 3=28416, 4=28416}", map.toString(), "create0 isZero");
     }
 
     @Test
@@ -215,7 +227,7 @@ final class ComparisonFaultTest {
                                         0x9000,
                                         Vecs.roundtrip(card, session, INS_CREATE, 1, 0, data)
                                                 .sw()));
-        int faults = 0;
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
         for (int n = 1; n <= t; n++) {
             Card c2 = Vecs.factory();
             Vecs.blankFor(c2, Vecs.cardA(c2));
@@ -223,6 +235,7 @@ final class ComparisonFaultTest {
             Fault.arm(EQUAL, n, Const.CHECK_FAIL);
             int sw = sw(() -> Vecs.roundtrip(c2, s2, INS_CREATE, 1, 0, data).sw());
             Fault.reset();
+            map.put(n, sw);
             if (sw != 0x6F00) {
                 continue;
             }
@@ -230,13 +243,9 @@ final class ComparisonFaultTest {
             assertTrue(
                     Arrays.equals(new byte[64], Internals.seedBytes(c2.applet(Spec.WALLET_AID))),
                     "seed left staged after the refused CREATE");
-            faults++;
         }
         // the staged seed and access-hash copies are compared before install (§16.2 item 4)
-        assertTrue(
-                faults >= 2,
-                "expected at least two refusing Bytes.equal evaluations of CREATE P1=01, got "
-                        + faults);
+        assertEquals("{1=28416, 2=28416, 3=36864, 4=28416, 5=28416}", map.toString(), "create1 equal");
     }
 
     // ── CHANGE: the staged access hash ───────────────────────────────────────
@@ -252,8 +261,15 @@ final class ComparisonFaultTest {
                                 assertEquals(
                                         0x9000,
                                         side.inner(INS_CHANGE, 0, Vecs.accessHashNew()).sw()));
-        Fault.arm(EQUAL, t, Const.CHECK_FAIL);
-        assertEquals(0x6F00, sw(() -> side.inner(INS_CHANGE, 0, Vecs.accessHashNew()).sw()));
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
+        for (int n = 1; n <= t; n++) {
+            // a benignly forced nth lets the CHANGE succeed and moves the access hash: fresh card
+            Side s2 = loaded(member);
+            Fault.arm(EQUAL, n, Const.CHECK_FAIL);
+            map.put(n, sw(() -> s2.inner(INS_CHANGE, 0, Vecs.accessHashNew()).sw()));
+            Fault.reset();
+        }
+        assertEquals("{1=28416, 2=28416, 3=28416}", map.toString(), "change equal");
     }
 
     // ── EXPORT/IMPORT: the second scalar checks and the key comparisons ──────
@@ -269,30 +285,36 @@ final class ComparisonFaultTest {
                                 assertEquals(
                                         0x9000,
                                         source.inner(INS_EXPORT, 0, target.exportRequest()).sw()));
-        Fault.arm(INRANGE, n, Const.CHECK_FAIL);
-        assertEquals(0x6F00, source.inner(INS_EXPORT, 0, target.exportRequest()).sw());
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
+        for (int k = 1; k <= n; k++) {
+            Fault.arm(INRANGE, k, Const.CHECK_FAIL);
+            map.put(k, sw(() -> source.inner(INS_EXPORT, 0, target.exportRequest()).sw()));
+            Fault.reset();
+            source.reopen(true);
+        }
+        assertEquals("{1=27264, 2=27264, 3=27264, 4=27264, 5=28416, 6=28416, 7=28416, 8=28416, 9=28416, 10=28416, 11=28416}", map.toString(), "export0 inRange");
     }
 
     @Test
     void exportLoadKeysForcedAreCaught() throws Exception {
-        for (int back = 1; back <= 2; back++) {
-            EmuMember target = new EmuMember();
-            Side source = loaded(target);
-            int t =
-                    calls(
-                            EQUAL,
-                            () ->
-                                    assertEquals(
-                                            0x9000,
-                                            source.inner(INS_EXPORT, 0, target.exportRequest())
-                                                    .sw()));
-            Fault.arm(EQUAL, t - back + 1, Const.CHECK_FAIL);
-            assertEquals(
-                    0x6F00,
-                    sw(() -> source.inner(INS_EXPORT, 0, target.exportRequest()).sw()),
-                    "forced Bytes.equal " + (t - back + 1) + "/" + t);
+        EmuMember target = new EmuMember();
+        Side source = loaded(target);
+        int t =
+                calls(
+                        EQUAL,
+                        () ->
+                                assertEquals(
+                                        0x9000,
+                                        source.inner(INS_EXPORT, 0, target.exportRequest())
+                                                .sw()));
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
+        for (int n = 1; n <= t; n++) {
+            Fault.arm(EQUAL, n, Const.CHECK_FAIL);
+            map.put(n, sw(() -> source.inner(INS_EXPORT, 0, target.exportRequest()).sw()));
             Fault.reset();
+            source.reopen(true);
         }
+        assertEquals("{1=28416, 2=28416, 3=36864, 4=28416, 5=36864, 6=36864, 7=27264, 8=27264, 9=36864, 10=28416, 11=36864, 12=36864, 13=27264, 14=28416, 15=28416, 16=28416, 17=28416}", map.toString(), "export0 equal");
     }
 
     @Test
@@ -307,23 +329,18 @@ final class ComparisonFaultTest {
                                 assertEquals(
                                         0x9000,
                                         source.inner(INS_EXPORT, 1, Vecs.accessHashNew()).sw()));
-        int faults = 0;
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
         for (int n = 1; n <= t; n++) {
             // each armed run needs the pending export its predecessor consumed
             assertEquals(0x9000, source.inner(INS_EXPORT, 0, target.exportRequest()).sw());
             Fault.arm(EQUAL, n, Const.CHECK_FAIL);
             int sw = sw(() -> source.inner(INS_EXPORT, 1, Vecs.accessHashNew()).sw());
             Fault.reset();
+            map.put(n, sw);
             source.reopen(true);
-            if (sw == 0x6F00) {
-                faults++;
-            }
         }
         // the staged seed and access-hash copies are compared before sealing (§16.2 item 4)
-        assertTrue(
-                faults >= 2,
-                "expected at least two refusing Bytes.equal evaluations of EXPORT P1=01, got "
-                        + faults);
+        assertEquals("{1=28416, 2=28416, 3=28416, 4=28416}", map.toString(), "export1 equal");
     }
 
     @Test
@@ -333,12 +350,49 @@ final class ComparisonFaultTest {
         byte[] offer = target.inner(INS_OFFER, 0, new byte[0]).data();
         byte[] lk = Arrays.copyOf(offer, 65);
         byte[][] head = source.importHead(target.a, lk);
+        byte[][] first = head;
         int n =
                 calls(
                         INRANGE,
-                        () -> assertEquals(0x9000, target.inner(INS_IMPORT, 0, head[0]).sw()));
-        Fault.arm(INRANGE, n, Const.CHECK_FAIL);
-        assertEquals(0x6F00, target.inner(INS_IMPORT, 0, head[0]).sw());
+                        () -> assertEquals(0x9000, target.inner(INS_IMPORT, 0, first[0]).sw()));
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
+        for (int k = 1; k <= n; k++) {
+            // each armed run needs the pending import a fresh OFFER created
+            offer = target.inner(INS_OFFER, 0, new byte[0]).data();
+            head = source.importHead(target.a, Arrays.copyOf(offer, 65));
+            byte[][] imp = head;
+            Fault.arm(INRANGE, k, Const.CHECK_FAIL);
+            map.put(k, sw(() -> target.inner(INS_IMPORT, 0, imp[0]).sw()));
+            Fault.reset();
+            target.reopen(false);
+        }
+        assertEquals("{1=27264, 2=27264, 3=28416, 4=28416, 5=27264, 6=27264, 7=28416, 8=28416}", map.toString(), "import0 inRange");
+    }
+
+    /** The double {@code secp.agree} products of IMPORT P1=00 (§16.2 item 4) refuse when forced. */
+    @Test
+    void importAgreeChecksForcedAreCaught() throws Exception {
+        EmuMember source = new EmuMember();
+        Side target = new Side();
+        byte[] offer = target.inner(INS_OFFER, 0, new byte[0]).data();
+        byte[] lk = Arrays.copyOf(offer, 65);
+        byte[][] head = source.importHead(target.a, lk);
+        byte[][] first = head;
+        int n =
+                calls(
+                        AGREE,
+                        () -> assertEquals(0x9000, target.inner(INS_IMPORT, 0, first[0]).sw()));
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
+        for (int k = 1; k <= n; k++) {
+            offer = target.inner(INS_OFFER, 0, new byte[0]).data();
+            head = source.importHead(target.a, Arrays.copyOf(offer, 65));
+            byte[][] imp = head;
+            Fault.arm(AGREE, k, Const.CHECK_FAIL);
+            map.put(k, sw(() -> target.inner(INS_IMPORT, 0, imp[0]).sw()));
+            Fault.reset();
+            target.reopen(false);
+        }
+        assertEquals("{1=28416, 2=28416}", map.toString(), "import0 agree");
     }
 
     // ── Wallet.install (IMPORT P1=01): the staged payload copies ─────────────
@@ -354,15 +408,10 @@ final class ComparisonFaultTest {
         assertEquals(0x9000, target.inner(INS_IMPORT, 0, head[0]).sw(), "IMPORT0");
         byte[] z = EmuMember.ecdhX(new java.math.BigInteger(1, head[1]), lk);
         byte[] m =
-                EmuMember.transcript(
-                        source.a, target.a, lk, Arrays.copyOfRange(head[0], 97, 162));
+                EmuMember.transcript(source.a, target.a, lk, Arrays.copyOfRange(head[0], 97, 162));
         byte[] payload =
                 EmuMember.payload(
-                        0x02,
-                        Vecs.seed(),
-                        Vecs.accessHash(),
-                        Ids.cardId(target.a),
-                        source.cardId);
+                        0x02, Vecs.seed(), Vecs.accessHash(), Ids.cardId(target.a), source.cardId);
         byte[] record = EmuMember.sealRecord(z, m, payload);
         int t =
                 calls(
@@ -370,10 +419,9 @@ final class ComparisonFaultTest {
                         () ->
                                 assertEquals(
                                         0x9000,
-                                        target.inner(INS_IMPORT, 1, Transfer.import1(record))
-                                                .sw(),
+                                        target.inner(INS_IMPORT, 1, Transfer.import1(record)).sw(),
                                         "IMPORT1"));
-        int faults = 0;
+        java.util.Map<Integer, Integer> map = new java.util.TreeMap<>();
         for (int n = 1; n <= t; n++) {
             // each armed run needs a fresh offer and the pending import its predecessor used
             offer = target.inner(INS_OFFER, 0, new byte[0]).data();
@@ -382,16 +430,11 @@ final class ComparisonFaultTest {
             Fault.arm(EQUAL, n, Const.CHECK_FAIL);
             int sw = sw(() -> target.inner(INS_IMPORT, 1, Transfer.import1(record)).sw());
             Fault.reset();
+            map.put(n, sw);
             target.reopen(false);
-            if (sw == 0x6F00) {
-                faults++;
-            }
         }
         // the staged seed and access-hash copies are compared before install (§16.2 item 4)
-        assertTrue(
-                faults >= 2,
-                "expected at least two refusing Bytes.equal evaluations of IMPORT P1=01, got "
-                        + faults);
+        assertEquals("{1=28416, 2=28416, 3=27264, 4=27264, 5=27264, 6=27264, 7=27264, 8=27264, 9=27264, 10=27264, 11=27264, 12=27264, 13=27264, 14=27264, 15=27264, 16=27264, 17=27264}", map.toString(), "import1 equal");
     }
 
     // ── Session words and range helpers: direct (Internals) checks ───────────
@@ -463,12 +506,10 @@ final class ComparisonFaultTest {
                             () ->
                                     Internals.invoke(
                                             transfer, "countRange", new Class[] {short.class}, c));
-            assertEquals(
-                    0x6A80, e.getReason() & 0xFFFF, "countRange(" + c + ") must refuse");
+            assertEquals(0x6A80, e.getReason() & 0xFFFF, "countRange(" + c + ") must refuse");
         }
         for (short c : new short[] {2, 3}) {
-            Object r =
-                    Internals.invoke(transfer, "countRange", new Class[] {short.class}, c);
+            Object r = Internals.invoke(transfer, "countRange", new Class[] {short.class}, c);
             assertEquals(c, ((Number) r).shortValue());
         }
     }
