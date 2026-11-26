@@ -622,10 +622,12 @@ val gateSweep by tasks.registering(Test::class) {
     )
     filter {
         // ReviewMutantTest's persistent site faults need the same weave; it self-skips
-        // in the unwoven `test` task
+        // in the unwoven `test` task, as do the site-armed fault tests
         includeTestsMatching("org.qntx.card.GateSweepTest")
         includeTestsMatching("org.qntx.card.ReviewMutantTest")
         includeTestsMatching("org.qntx.card.GateSweepPredicateTest")
+        includeTestsMatching("org.qntx.card.DerivationFaultTest")
+        includeTestsMatching("org.qntx.card.ReceiveBoundTest")
     }
     testLogging {
         events("failed", "passed")
@@ -717,33 +719,10 @@ pitest {
             // invokes that shift the numbering, so the armed sites miss — the mutant
             // assertions still run under gateSweep where the weaving is ours alone
             "org.qntx.card.ReviewMutantTest",
+            "org.qntx.card.DerivationFaultTest",
+            "org.qntx.card.ReceiveBoundTest",
         )
     mutators = listOf("STRONGER")
-    excludedMethods =
-        listOf(
-            // the multi-block loop is unreachable in the simulator (receiveBytes
-            // returns the whole Lc in one shot); it exists for real-card chaining
-            "*receiveAll",
-            // pending() is a redundant member check behind beginDispatch, which runs the
-            // same membership dispatch itself: a corrupt word gets the identical 6F00
-            // from either layer, so its conditional mutants are equivalent there
-            "*pending",
-            // txDepth wraps getTransactionDepth solely so the depth gate can be armed;
-            // its return mutants coincide with the read-back gate that follows
-            "*txDepth",
-            // countRange is the spec check-3 wording of c in {2,3}: the dispatch's
-            // {160,176} IMPORT bound plus |payload| = 98 + 16c already force it, so
-            // every never-branch mutant is equivalent — kept for check-order fidelity
-            "*countRange",
-            // seedOff's only mutant shifts the master's 64-byte window by one; a
-            // shifted window still derives a valid BIP-32 master with overwhelming
-            // probability, so no input distinguishes it
-            "*seedOff",
-            // slotOf runs only after memberSlot has thrown on self == found, so the
-            // equality boundary mutant is unreachable; the direction mutants coincide
-            // with the peer-slot writes asserted by the transfer tests
-            "*slotOf",
-        )
     avoidCallsTo =
         listOf(
             // Const.init forces install-time class initialisation, which runs once

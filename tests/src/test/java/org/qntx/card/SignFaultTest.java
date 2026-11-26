@@ -110,7 +110,7 @@ final class SignFaultTest {
 
     @Test
     void ecdsaFlipEscapesWhenTheVerifyResultIsCorrupted() throws Exception {
-        // Documented §16.2 item 5 limit kept as a test: the self-verify evaluates one computed
+        // Documented §16.2 item 6 limit kept as a test: the self-verify evaluates one computed
         // result twice, so a result fault needs a matching computation fault — forcing
         // verifyHash to CHECK_OK lets the flipped signature out. A real card fault model that
         // corrupts both computation and its check defeats this defence by construction.
@@ -302,7 +302,7 @@ final class SignFaultTest {
 
     @Test
     void eachSelfVerifyEvalStandsAlone() throws Exception {
-        // §16.2 item 5 evaluates one computed result twice: faulting either evaluation on
+        // §16.2 item 6 evaluates one computed result twice: faulting either evaluation on
         // its own must still keep the signature in — otherwise a single gate is dead code
         byte[] bip = bip340Data(Vecs.message(), Vecs.tweakBip86(), Vecs.pathSecpEvm());
         // v1 and v2 are the last two verifyHash calls of the command — earlier ones
@@ -325,10 +325,10 @@ final class SignFaultTest {
         verified();
         Fault.countCalls();
         assertEquals(0x9000, inner(0x32, 0, bip).sw());
-        int isZeros = Fault.calls("ModArith.isZero");
+        int isZeros = Fault.calls("Bytes.isZero");
         Fault.reset();
         verified();
-        Fault.arm("ModArith.isZero", isZeros, Const.CHECK_OK);
+        Fault.arm("Bytes.isZero", isZeros, Const.CHECK_OK);
         assertNoOutput(inner(0x32, 0, bip));
         // the mod-n reduces are fault-injectable through their coded return
         for (int nth : new int[] {1, 2}) {

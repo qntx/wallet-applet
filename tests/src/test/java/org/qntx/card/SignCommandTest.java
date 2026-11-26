@@ -289,7 +289,7 @@ final class SignCommandTest {
         assertEquals(64, r.data().length);
         byte[] pk = Crypto.decompress(Vecs.hex(Vecs.secpTemplate("evm"), "publicKey"));
         assertTrue(Ecdsa.verify(pk, Vecs.digest(), r.data()));
-        // §16.2 item 5: a corrupted engine output must fault before anything leaves
+        // §16.2 item 6: a corrupted engine output must fault before anything leaves
         Fault.armEcdsaFlip(1);
         assertEquals(0x6F00, inner(0x31, 0, ecdsaData(Vecs.pathSecpEvm())).sw());
     }

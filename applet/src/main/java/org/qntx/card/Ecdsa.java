@@ -9,7 +9,7 @@ import javacard.security.KeyBuilder;
 
 /**
  * SIGN_ECDSA (§9.9, §12.1): RFC 6979-independent ECDSA over the secp256k1 leaf key with the
- * platform nonce, self-verified before output (§16.2 item 5) under one of four rotating verify keys
+ * platform nonce, self-verified before output (§16.2 item 6) under one of four rotating verify keys
  * (§16.1 item 1, architecture §5.4) — persistent public-key objects that hold no secret and no
  * state; the {@code setW} is the command's only persistent write and runs outside any transaction.
  *
@@ -56,7 +56,7 @@ final class Ecdsa {
 
     /**
      * Data {@code digest(32) ‖ path}, response {@code r(32) ‖ s(32)} at {@code buf[0]} (§9.9). The
-     * verification key is computed independently of the signature (§16.2 item 5): public derivation
+     * verification key is computed independently of the signature (§16.2 item 6): public derivation
      * {@code Q = IL·G + K_par} via {@code PACE_GM} for a non-hardened leaf, {@code k_leaf·G} for a
      * hardened one — always before the signature exists. A failed self-verification or a degraded
      * {@code verified} flag is a detected fault ({@code 6F00}).
@@ -70,7 +70,7 @@ final class Ecdsa {
         Util.arrayCopy(buf, dataOff, h, (short) 0, Const.HASH_LEN);
         short depth = (short) (buf[(short) (dataOff + 32)] & 0xFF);
         boolean hardened = (buf[(short) (dataOff + 33 + depth * 4 - 4)] & 0x80) != 0;
-        // the independent leaf public key, before signing (§16.2 item 5)
+        // the independent leaf public key, before signing (§16.2 item 6)
         if (hardened) {
             secp.mul(n, (short) 0, Secp256k1.G, (short) 0, buf, (short) 0);
             secp.wipeScalar();

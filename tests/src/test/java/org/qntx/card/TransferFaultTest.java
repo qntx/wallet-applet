@@ -924,7 +924,7 @@ final class TransferFaultTest {
         Side source = loaded(target);
         byte[] data = concat(target.cert, target.offer());
         assertEquals(
-                15,
+                17,
                 measure(source, INS_EXPORT, 0, data, "Bytes.equal"),
                 "Bytes.equal evaluations of EXPORT P1=00");
         int c = memberCount(source);
@@ -975,7 +975,7 @@ final class TransferFaultTest {
         Side target = loadedTarget(source);
         byte[] data = concat(source.cert, export(source, target)[0]);
         assertEquals(
-                16,
+                18,
                 measure(target, INS_IMPORT, 0, data, "Bytes.equal"),
                 "Bytes.equal evaluations of IMPORT P1=00");
         int c = memberCount(target);

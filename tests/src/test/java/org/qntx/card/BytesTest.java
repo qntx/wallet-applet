@@ -91,4 +91,24 @@ final class BytesTest {
             agree(buf, (short) 8, (short) len, "not a block len=" + len);
         }
     }
+
+    @Test
+    void isZeroReportsAllZeroOnly() {
+        byte[] buf = new byte[80];
+        for (int len = 1; len <= 64; len++) {
+            assertEquals(
+                    Const.CHECK_OK, Bytes.isZero(buf, (short) 8, (short) len), "zeros len=" + len);
+            for (int pos = 0; pos < len; pos += 7) {
+                buf[8 + pos] = (byte) (1 + Vecs.RND.nextInt(0xFF));
+                assertEquals(
+                        Const.CHECK_FAIL,
+                        Bytes.isZero(buf, (short) 8, (short) len),
+                        "nonzero at " + pos);
+                buf[8 + pos] = 0;
+            }
+        }
+        // a byte outside the window does not count
+        buf[8 + 32] = 1;
+        assertEquals(Const.CHECK_OK, Bytes.isZero(buf, (short) 8, (short) 32), "window only");
+    }
 }

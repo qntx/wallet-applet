@@ -170,7 +170,7 @@ final class Secp256k1 {
      * {@code out = s·G + H} (65-byte uncompressed) via the shared {@link Mem#paceGm} engine: {@code
      * h} is the 65-byte uncompressed point and {@code s} the 32-byte scalar loaded into {@link
      * #ephKey} (overwritten in a {@code finally}). The output must not overlap {@code h} ({@code
-     * generateSecret} reads its input point). A {@code CryptoException} propagates — §16.2 item 8
+     * generateSecret} reads its input point). A {@code CryptoException} propagates — §16.2 item 9
      * maps it to {@code 6F00} inside a signing command.
      */
     short mulAdd(byte[] s, short sOff, byte[] h, short hOff, byte[] out, short oOff) {
@@ -266,16 +266,17 @@ final class Secp256k1 {
     }
 
     /**
-     * {@code out = x-coordinate of key·point} (32 bytes), the ECDH shared secret of §9.13–9.14.
-     * PLAIN_XY rejects an invalid {@code point} itself (§16.5); a {@code CryptoException} maps to
-     * {@code CHECK_FAIL}. The key object is the caller's — the link pair's private half or the
-     * transient {@link #ephKey} slot, never copied out.
+     * {@code out = key·point} (the full 65-byte uncompressed product), the ECDH of §9.13–9.14 — the
+     * shared secret {@code Z} is {@code out[oOff + 1 .. oOff + 33)}. PLAIN_XY rejects an invalid
+     * {@code point} itself (§16.5); a {@code CryptoException} maps to {@code CHECK_FAIL}. The key
+     * object is the caller's — the link pair's private half or the transient {@link #ephKey} slot,
+     * never copied out. No internal staging: the product lands in the caller's buffer so two
+     * independent products can coexist (§16.2 item 4).
      */
     short agree(ECPrivateKey key, byte[] point, short pOff, byte[] out, short oOff) {
         try {
             mem.plainXy.init(key);
-            mem.plainXy.generateSecret(point, pOff, Const.POINT_LEN, mem.P, P_Y2);
-            Util.arrayCopy(mem.P, (short) (P_Y2 + 1), out, oOff, (short) 32);
+            mem.plainXy.generateSecret(point, pOff, Const.POINT_LEN, out, oOff);
             return Const.CHECK_OK;
         } catch (CryptoException e) {
             return Const.CHECK_FAIL;
@@ -389,8 +390,12 @@ final class Secp256k1 {
         return i;
     }
 
-    /** {@code CHECK_OK} when the 32-byte value is in {@code [1, n−1]}. */
-    private static short inRange(byte[] v, short off) {
+    /**
+     * {@code CHECK_OK} when the 32-byte value is in {@code [1, n−1]} — the range predicate of
+     * {@link #randomScalar}, re-evaluated by callers whose scalar must survive a second,
+     * independent check immediately before it is used (§16.2 item 4).
+     */
+    static short inRange(byte[] v, short off) {
         short any = 0;
         for (short i = 0; i < 32; i++) {
             any |= v[(short) (off + i)];

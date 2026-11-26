@@ -49,7 +49,7 @@ final class Derivation {
     /**
      * {@link Mem#P} slot of a child's parent public point {@code K_par} (65 B): the point the
      * non-hardened CKD input compresses from and, after {@link #derive} of a non-hardened leaf, the
-     * key {@link Ecdsa} needs for the §16.2 item 5 public-derivation check.
+     * key {@link Ecdsa} needs for the §16.2 item 6 public-derivation check.
      */
     static final short P_PAR = 65;
 
@@ -105,7 +105,7 @@ final class Derivation {
     /**
      * §10.2: {@code out = kM(32) ‖ cM(32)}, the BIP-32 master node {@code HMAC-SHA512("Bitcoin
      * seed", seed)}; coded {@code CHECK_OK} iff {@code 1 ≤ int(kM) ≤ n − 1} (constant time via
-     * {@link ModArith#isZero}/{@link ModArith#below}).
+     * {@link Bytes#isZero}/{@link ModArith#below}).
      */
     short master(byte[] seed, short sOff, short sLen, byte[] out, short oOff) {
         hmac(
@@ -118,7 +118,7 @@ final class Derivation {
                 out,
                 oOff);
         short r = Const.CHECK_FAIL;
-        if (ModArith.isZero(out, oOff) != Const.CHECK_OK
+        if (Bytes.isZero(out, oOff, (short) 32) != Const.CHECK_OK
                 && modArith.below(ModArith.MOD_N, out, oOff) == Const.CHECK_OK) {
             r = Const.CHECK_OK;
         }
@@ -132,7 +132,7 @@ final class Derivation {
      * at {@code Mem#P[65..130)}. {@code pub[pOff]} is THIS parent's cached point: {@code pOff < 0}
      * means none (the point is computed), a marker {@code 0x04} reuses the slot, any other marker
      * computes the point and fills the slot. A {@code CryptoException} from the point
-     * multiplication is an invalid child (§16.2 item 8), not an error. Coded result: {@code IL < n}
+     * multiplication is an invalid child (§16.2 item 9), not an error. Coded result: {@code IL < n}
      * and {@code k ≠ 0} for secp256k1; always {@code CHECK_OK} for ed25519.
      */
     short child(byte[] data, short iOff, byte curve, byte[] pub, short pOff) {
@@ -181,7 +181,7 @@ final class Derivation {
         if (modArith.below(ModArith.MOD_N, p, P_TMP) == Const.CHECK_OK) {
             // k = (int(IL) + k_par) mod n, in place in the node slot
             modArith.addMod(ModArith.MOD_N, p, P_TMP, n, N_KEY, n, N_KEY);
-            if (ModArith.isZero(n, N_KEY) != Const.CHECK_OK) {
+            if (Bytes.isZero(n, N_KEY, (short) 32) != Const.CHECK_OK) {
                 Util.arrayCopy(p, (short) (P_TMP + 32), n, N_CHAIN, Const.HASH_LEN);
                 r = Const.CHECK_OK;
             }

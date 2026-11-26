@@ -20,6 +20,18 @@ final class Bytes {
         return diff == 0 ? Const.CHECK_OK : Const.CHECK_FAIL;
     }
 
+    /**
+     * Constant-time all-zero test of {@code len} bytes: fixed loop bound, OR of the bytes, no early
+     * exit. Returns the coded result (§16.2 item 1): {@code CHECK_OK} iff every byte is 0.
+     */
+    static short isZero(byte[] a, short off, short len) {
+        byte any = 0;
+        for (short i = 0; i < len; i++) {
+            any |= a[(short) (off + i)];
+        }
+        return any == 0 ? Const.CHECK_OK : Const.CHECK_FAIL;
+    }
+
     /** Zeroes transient memory or the APDU buffer; persistent arrays use atomic writes only. */
     static void wipe(byte[] arr, short off, short len) {
         Util.arrayFillNonAtomic(arr, off, len, (byte) 0);

@@ -2,22 +2,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package org.qntx.card;
 
-import javacard.framework.Util;
 import javacard.security.AESKey;
 import javacard.security.MessageDigest;
 import javacard.security.Signature;
 
 /**
  * The two key-derivation functions of spec/protocol.md §1. Static helpers over the shared engines;
- * the {@link Mem#W_KDF} region of {@link Mem#W} is scratch — inputs and {@code out} must not
- * overlap it.
+ * {@link Kdf#kdf108} uses the {@link Mem#W_KDF} region of {@link Mem#W} as scratch — inputs and
+ * {@code out} must not overlap it — while {@link Kdf#kdf} keeps no scratch at all: its counters
+ * come from {@link Const#KDF_COUNTER} and every block is written straight to {@code out}, so two
+ * derivations sharing one command share no temporary (§16.2 item 4).
  */
 final class Kdf {
     private Kdf() {}
 
     /**
      * One-step KDF of NIST SP 800-56C Rev. 2 §4.1 option 1 (§1): the first {@code len} bytes of
-     * {@code SHA-256(u32(1) ‖ Z ‖ label ‖ ctx) ‖ SHA-256(u32(2) ‖ …)}, {@code len ≤ 64}.
+     * {@code SHA-256(u32(1) ‖ Z ‖ label ‖ ctx) ‖ SHA-256(u32(2) ‖ …)}, {@code len ∈ {32, 64}}.
      */
     static void kdf(
             Mem mem,
@@ -32,23 +33,13 @@ final class Kdf {
             short outOff,
             short len) {
         MessageDigest sha = mem.sha256;
-        byte[] w = mem.W;
-        short done = 0;
-        for (short i = 1; i <= 2 && done < len; i++) {
-            Util.setShort(w, (short) (Mem.W_KDF + 36), (short) 0);
-            Util.setShort(w, (short) (Mem.W_KDF + 38), i);
+        for (short i = 1; (short) (i * 32) <= len; i++) {
             sha.reset();
-            sha.update(w, (short) (Mem.W_KDF + 36), (short) 4);
+            sha.update(Const.KDF_COUNTER, (short) ((i - 1) * 4), (short) 4);
             sha.update(z, zOff, zLen);
             sha.update(label, (short) 0, (short) label.length);
             sha.update(ctx, ctxOff, ctxLen);
-            if ((short) (len - done) >= Const.HASH_LEN) {
-                sha.doFinal(w, (short) 0, (short) 0, out, (short) (outOff + done));
-            } else {
-                sha.doFinal(w, (short) 0, (short) 0, w, Mem.W_KDF);
-                Util.arrayCopy(w, Mem.W_KDF, out, (short) (outOff + done), (short) (len - done));
-            }
-            done += Const.HASH_LEN;
+            sha.doFinal(z, (short) 0, (short) 0, out, (short) (outOff + (short) ((i - 1) * 32)));
         }
     }
 

@@ -10,8 +10,8 @@ import javacard.security.MessageDigest;
 /**
  * SIGN_BIP340 (§9.10, §12.2): BIP-340 "Default Signing" with the BIP-341 tweak — {@code d₀} from
  * {@link Derivation}, parity-normalized, tweaked, the nonce hedged with 32 random bytes, the secret
- * product {@code e·d} recombined masked per §16.2 item 6, and the signature self-verified ({@code
- * s·G − e·Q = R}, §16.2 item 5) before output.
+ * product {@code e·d} recombined masked per §16.2 item 7, and the signature self-verified ({@code
+ * s·G − e·Q = R}, §16.2 item 6) before output.
  *
  * <p>Scratch layout: {@code P[0..65)} {@code P}/{@code P_even}, then {@code R}; {@code P[65..130)}
  * {@code Q}, then the self-verify point {@code V}; {@code N[0..65)} the self-verify's {@code T =
@@ -59,10 +59,10 @@ final class Bip340 {
         modArith.negateIf(ModArith.MOD_N, h, (short) 0, bit);
         modArith.negateIf(ModArith.MOD_P, p, (short) 33, bit);
         modArith.addMod(ModArith.MOD_N, h, (short) 0, buf, tweakOff, h, (short) 0);
-        if (ModArith.isZero(h, (short) 0) == Const.CHECK_OK) {
+        if (Bytes.isZero(h, (short) 0, (short) 32) == Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
-        if (ModArith.isZero(buf, tweakOff) == Const.CHECK_OK) {
+        if (Bytes.isZero(buf, tweakOff, (short) 32) == Const.CHECK_OK) {
             // t = 0 signs with the even internal key; PACE_GM never gets a zero scalar
             Util.arrayCopy(p, (short) 0, p, (short) 65, Const.POINT_LEN);
         } else {
@@ -86,7 +86,7 @@ final class Bip340 {
         mem.sha256.update(p, (short) 66, (short) 32);
         mem.sha256.doFinal(buf, dataOff, (short) 32, h, (short) 32);
         if (modArith.reduce(ModArith.MOD_N, h, (short) 32) != Const.CHECK_OK
-                || ModArith.isZero(h, (short) 32) == Const.CHECK_OK) {
+                || Bytes.isZero(h, (short) 32, (short) 32) == Const.CHECK_OK) {
             // probability 2^-256; a fault is the plausible explanation
             ISOException.throwIt(Const.SW_FAULT);
         }
@@ -101,7 +101,7 @@ final class Bip340 {
         if (modArith.reduce(ModArith.MOD_N, h, (short) 64) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        // s = ((k + e·d₁) + e·d₂) mod n, shares re-drawn per signature (§16.2 item 6)
+        // s = ((k + e·d₁) + e·d₂) mod n, shares re-drawn per signature (§16.2 item 7)
         modArith.share(ModArith.MOD_N, h, (short) 0, h, (short) 96, h, (short) 128);
         modArith.mulMasked(
                 ModArith.MOD_N,
@@ -112,7 +112,7 @@ final class Bip340 {
                 (short) 128,
                 (short) 160,
                 (short) 0);
-        // self-verify (§16.2 item 5): V = s·G − e·Q must equal R, even y — checked twice
+        // self-verify (§16.2 item 6): V = s·G − e·Q must equal R, even y — checked twice
         modArith.negateIf(ModArith.MOD_N, h, (short) 64, (short) 1); // c = (n − e) mod n
         secp.mul(h, (short) 64, p, (short) 65, n, (short) 0);
         secp.wipeScalar();

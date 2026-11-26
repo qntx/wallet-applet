@@ -141,11 +141,6 @@ final class ModArithTest {
                         of(s).compareTo(mod) < 0 ? Const.CHECK_OK : Const.CHECK_FAIL,
                         m.below(moduli[mi], s, (short) 0),
                         "below " + moduli[mi]);
-                // isZero
-                assertEquals(
-                        of(s).signum() == 0 ? Const.CHECK_OK : Const.CHECK_FAIL,
-                        ModArith.isZero(s, (short) 0),
-                        "isZero");
                 // reduce: any 256-bit input lands below m
                 byte[] r = s.clone();
                 m.reduce(moduli[mi], r, (short) 0);

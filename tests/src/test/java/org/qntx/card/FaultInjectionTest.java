@@ -111,7 +111,7 @@ final class FaultInjectionTest {
 
     @Test
     void aFaultySelfVerificationFaultsOpen() throws Exception {
-        // §16.2 item 5: the armed CHECK_FAIL must fault the whole OPEN — 6F00, no response
+        // §16.2 item 6: the armed CHECK_FAIL must fault the whole OPEN — 6F00, no response
         // data, and the previous session is torn down by process()
         Card card = Vecs.blankSelf();
         var session = Vecs.open(card);
