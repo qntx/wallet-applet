@@ -11,6 +11,7 @@ import javacard.framework.JCSystem;
 import javacard.framework.Util;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.qntx.card.host.Certificates;
 import org.qntx.card.host.Ids;
 import org.qntx.card.host.Response;
 import org.qntx.card.host.Session;
@@ -236,6 +237,53 @@ final class ComparisonFaultTest {
         assertEquals("{1=28416, 2=28416, 3=28416, 4=28416}", map.toString(), "create0 equal");
     }
 
+    /**
+     * The draw loop's {@code Bytes.wipe(W_T)} before {@code nextBytes} is a counted call: a
+     * mutation that drops it leaves the seed the draw produced identical, so the only
+     * observable is the call count itself.
+     */
+    @Test
+    void createDrawWipeIsCounted() throws Exception {
+        byte[] data = new byte[64];
+        System.arraycopy(Vecs.accessHash(), 0, data, 0, 32);
+        System.arraycopy(Vecs.entropy(), 0, data, 32, 32);
+        Card card = Vecs.factory();
+        Vecs.blankFor(card, Vecs.cardA(card));
+        Session session = Vecs.open(card);
+        int w =
+                calls(
+                        "Bytes.wipe",
+                        () ->
+                                assertEquals(
+                                        0x9000,
+                                        Vecs.roundtrip(card, session, INS_CREATE, 0, 0, data)
+                                                .sw()));
+        assertEquals(8, w, "create0 Bytes.wipe calls");
+    }
+
+    /**
+     * The staged-seed wipe on the compare-fail path: the same fault is armed as in {@link
+     * #createSeedCopiesForcedAreCaught} and the {@code Bytes.wipe} count is asserted — the
+     * teardown wipe lands the same under the mutation, so the count is what separates them.
+     */
+    @Test
+    void createStagedSeedWipeIsCounted() throws Exception {
+        byte[] data = new byte[96 + 16];
+        byte[] id = new EmuMember().cardId;
+        System.arraycopy(Vecs.accessHash(), 0, data, 0, 32);
+        System.arraycopy(Vecs.seed(), 0, data, 32, 64);
+        System.arraycopy(id, 0, data, 96, 16);
+        Card card = Vecs.factory();
+        Vecs.blankFor(card, Vecs.cardA(card));
+        Session s2 = Vecs.open(card);
+        // n = 1 is the staged-seed compare (the first Bytes.equal of CREATE P1=01)
+        Fault.countCalls();
+        Fault.arm(EQUAL, 1, Const.CHECK_FAIL);
+        int sw = sw(() -> Vecs.roundtrip(card, s2, INS_CREATE, 1, 0, data).sw());
+        assertEquals(0x6F00, sw, "forced staged-seed compare");
+        assertEquals(10, Fault.calls("Bytes.wipe"), "create1 Bytes.wipe calls");
+    }
+
     @Test
     void createSeedCopiesForcedAreCaught() throws Exception {
         byte[] data = new byte[96 + 16];
@@ -353,6 +401,34 @@ final class ComparisonFaultTest {
                 "{1=28416, 2=28416, 3=36864, 4=28416, 5=36864, 6=36864, 7=27264, 8=27264, 9=36864, 10=28416, 11=36864, 12=36864, 13=27264, 14=28416, 15=28416, 16=28416, 17=28416}",
                 map.toString(),
                 "export0 equal");
+    }
+
+    /**
+     * An export request naming the source's own identity is refused by the {@code A != A} check of
+     * §9.13 step 2; forcing that compare lets the request through so {@code memberSlot} still has
+     * to reject the self-export — without the {@code self == found} check the offer signature then
+     * fails with 6A80 instead. The session's tag compare takes the first two {@code Bytes.equal}
+     * calls of every command, so the certificate compare is the third.
+     */
+    @Test
+    void memberSlotSelfExportIsFault() throws Exception {
+        EmuMember target = new EmuMember();
+        Side source = loaded(target);
+        byte[] selfCert = Certificates.issue(Vecs.caPrivate(), source.a);
+        byte[] offer = target.newOffer();
+        byte[] request = new byte[selfCert.length + offer.length];
+        System.arraycopy(selfCert, 0, request, 0, selfCert.length);
+        System.arraycopy(offer, 0, request, selfCert.length, offer.length);
+        Fault.arm(EQUAL, 3, Const.CHECK_FAIL);
+        try {
+            assertEquals(
+                    Const.SW_FAULT,
+                    sw(() -> source.inner(INS_EXPORT, 0, request).sw()),
+                    "self export");
+        } finally {
+            Fault.reset();
+            source.reopen(true);
+        }
     }
 
     /** Forcing {@code memberSlot}'s candidate check at self's index makes {@code self == found}. */
