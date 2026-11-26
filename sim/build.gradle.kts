@@ -153,7 +153,7 @@ tasks.test {
     dependsOn(agentJar)
     jvmArgumentProviders.add(
         CommandLineArgumentProvider {
-            listOf("-javaagent:${agentJar.get().archiveFile.get().asFile.absolutePath}=org/qntx/card/sim/probe")
+            listOf("-javaagent:${agentJar.get().archiveFile.get().asFile.absolutePath}=org/qntx/card/sim/probe;sites;dsa=DsaProbe")
         },
     )
 }

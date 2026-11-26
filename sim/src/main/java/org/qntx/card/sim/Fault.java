@@ -45,17 +45,47 @@ public final class Fault {
     /** {@link #armSite} mode: run the negated branch to the same target (branches only). */
     public static final int SITE_INVERT = 2;
 
+    /** {@link #armSite} mode of a branch site: take the branch regardless of the condition. */
+    public static final int SITE_TAKE = 3;
+
+    /** {@link #armSite} mode of a branch site: fall through regardless of the condition. */
+    public static final int SITE_FALL = 4;
+
+    /** {@link #armSite} mode of an invoke site: pop the arguments and push the armed value. */
+    public static final int SITE_FORCED = 5;
+
+    /** {@link #armSite} mode of a data site: the loaded value is replaced by 0. */
+    public static final int SITE_ZERO = 6;
+
+    /** {@link #armSite} mode of a data site: the loaded value is replaced by -1. */
+    public static final int SITE_ONES = 7;
+
+    /** {@link #armSite} mode of a data site: the loaded value is XORed with 1. */
+    public static final int SITE_FLIP = 8;
+
     /** The {@link #calls} key the ECDSA verify wrapper counts under. */
     public static final String ECDSA_VERIFY = "ECDSA.verify";
+
+    /**
+     * The watchdog's dedicated error: thrown when the armed hit budget is exceeded so the sweep
+     * records the attempt as a hang instead of a verdict.
+     */
+    public static final class Hang extends Error {
+        public Hang() {
+            super("fault watchdog: site-hit budget exceeded");
+        }
+    }
 
     private static final class SiteSlot {
         int seen;
         final int nth;
         final int mode;
+        final short value;
 
-        SiteSlot(int nth, int mode) {
+        SiteSlot(int nth, int mode, short value) {
             this.nth = nth;
             this.mode = mode;
+            this.value = value;
         }
     }
 
@@ -71,6 +101,8 @@ public final class Fault {
     private static int ecdsaCalls;
     private static int verifyTrueArmed;
     private static int verifyTrueSeen;
+    private static long hitBudget;
+    private static long hits;
 
     private Fault() {}
 
@@ -150,8 +182,32 @@ public final class Fault {
      * mutant. Only works when the agent runs with the {@code sites} argument.
      */
     public static void armSite(String key, int nth, int mode) {
-        armedSites.put(key, new SiteSlot(nth, mode));
+        armedSites.put(key, new SiteSlot(nth, mode, (short) 0));
         active = true;
+    }
+
+    /**
+     * Like {@link #armSite} but carries the value the site pushes: the {@link #SITE_FORCED} mode of
+     * an invoke site pops the arguments and returns {@code value} instead of calling the method.
+     */
+    public static void armSite(String key, int nth, int mode, short value) {
+        armedSites.put(key, new SiteSlot(nth, mode, value));
+        active = true;
+    }
+
+    /**
+     * The per-attempt watchdog (architecture §6): {@code hits} site and call hits after arming
+     * throw {@link Hang}, which the sweep records as a hang. {@code budget = 0} disarms.
+     */
+    public static void watchdog(long budget) {
+        hitBudget = budget;
+        hits = 0;
+    }
+
+    private static void hit() {
+        if (hitBudget != 0 && ++hits > hitBudget) {
+            throw new Hang();
+        }
     }
 
     /**
@@ -201,6 +257,8 @@ public final class Fault {
         ecdsaFlipArmed = 0;
         verifyTrueArmed = 0;
         verifyTrueSeen = 0;
+        hitBudget = 0;
+        hits = 0;
     }
 
     /**
@@ -223,6 +281,7 @@ public final class Fault {
         if (!active) {
             return false;
         }
+        hit();
         counts.merge(method, 1, Integer::sum);
         Slot s = armed.get(method);
         return s != null && s.skipping && s.nth.contains(++s.calls);
@@ -248,6 +307,7 @@ public final class Fault {
         if (!active) {
             return 0;
         }
+        hit();
         sites.merge(key, 1, Integer::sum);
         SiteSlot s = armedSites.get(key);
         if (s == null) {
@@ -257,6 +317,38 @@ public final class Fault {
             return s.mode;
         }
         return ++s.seen == s.nth ? s.mode : 0;
+    }
+
+    /**
+     * The armed value of a {@link #SITE_FORCED} invoke site; only called on the forced path, after
+     * {@link #site} already returned the mode for {@code key}.
+     */
+    public static short forced(String key) {
+        SiteSlot s = armedSites.get(key);
+        return s != null ? s.value : 0;
+    }
+
+    /**
+     * The woven guard of a data site (a primitive load): the loaded {@code value}, or the armed
+     * fault — {@link #SITE_ZERO}, {@link #SITE_ONES} or {@link #SITE_FLIP} — on the armed
+     * occurrence. Counts the site while active; the fast path is one volatile read.
+     */
+    public static int data(int value, String key) {
+        if (!active) {
+            return value;
+        }
+        hit();
+        sites.merge(key, 1, Integer::sum);
+        SiteSlot s = armedSites.get(key);
+        if (s == null || (s.nth != 0 && ++s.seen != s.nth)) {
+            return value;
+        }
+        return switch (s.mode) {
+            case SITE_ZERO -> 0;
+            case SITE_ONES -> -1;
+            case SITE_FLIP -> value ^ 1;
+            default -> value;
+        };
     }
 
     /**
@@ -280,6 +372,7 @@ public final class Fault {
         if (!active) {
             return value;
         }
+        hit();
         counts.merge(method, 1, Integer::sum);
         Slot s = armed.get(method);
         if (s == null || !s.nth.contains(++s.calls)) {
