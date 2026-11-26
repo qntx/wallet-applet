@@ -56,6 +56,13 @@ final class Session {
     /** {@link Mem#P} slot of {@link #open}: the host ephemeral. */
     private static final short P_HOST = 0;
 
+    /**
+     * {@link Mem#P} slot of {@link #open}'s second KDF output — {@code hostEph} at {@link #P_HOST}
+     * is dead after the second {@code mul}; the {@code getKey} read-back lands at {@code P_K2 +
+     * 64}, right behind it.
+     */
+    private static final short P_K2 = 0;
+
     private final Mem mem;
     private final State state;
     private final Secp256k1 secp;
@@ -137,6 +144,11 @@ final class Session {
         byte[] w = mem.W;
         Util.arrayCopy(buf, ISO7816.OFFSET_CDATA, p, P_HOST, Const.POINT_LEN);
         secp.randomScalar(w, W_X);
+        // the drawn scalar is checked in range a second time, independently of the
+        // draw loop's own check, immediately before it is used (§16.2 item 4)
+        if (Secp256k1.inRange(w, W_X) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         // cardEph = x·G straight into the response area; Z point into scratch
         secp.mul(w, W_X, Secp256k1.G, (short) 0, buf, (short) 0);
         try {
@@ -166,10 +178,38 @@ final class Session {
                 w,
                 W_KEYS,
                 (short) 64);
+        // the session keys are derived twice into separate buffers and compared in
+        // constant time: a single fault inside one KDF leaves a mismatch (§16.2
+        // item 4); Z is shared — a fault on it desynchronises the card from the
+        // host's independent derivation, which refuses the first record
+        Kdf.kdf(
+                mem,
+                w,
+                W_Z,
+                (short) 32,
+                Const.LABEL_KDF_SESSION,
+                w,
+                W_TH,
+                Const.HASH_LEN,
+                p,
+                P_K2,
+                (short) 64);
+        if (Bytes.equal(w, W_KEYS, p, P_K2, (short) 64) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         kce.setKey(w, (short) (W_KEYS + 0));
         kcm.setKey(w, (short) (W_KEYS + 16));
         kre.setKey(w, (short) (W_KEYS + 32));
         krm.setKey(w, (short) (W_KEYS + 48));
+        // each key object is read back and compared with the second derivation:
+        // a skipped or faulted setKey leaves no session keys at all (§16.2 item 4)
+        kce.getKey(p, (short) (P_K2 + 64));
+        kcm.getKey(p, (short) (P_K2 + 80));
+        kre.getKey(p, (short) (P_K2 + 96));
+        krm.getKey(p, (short) (P_K2 + 112));
+        if (Bytes.equal(p, (short) (P_K2 + 64), p, P_K2, (short) 64) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         initEngines();
         setWord(O_OPEN, Const.SESSION_OPEN);
         state.cert(buf, (short) (Const.POINT_LEN + 64));
