@@ -530,11 +530,11 @@ final class Transfer {
         }
         short self = -1;
         short found = -1;
-        // the index of found among the members other than self (§16.1 item 1): the number
-        // of non-self members seen before found — computed inside the loop so no boundary
-        // on self's position is needed
+        // the index of found among the members other than self (§16.1 item 1): i minus the
+        // selves seen before it — computed inside the loop so no boundary on self's
+        // position is needed
         short slot = -1;
-        short nonSelf = 0;
+        short selvesBefore = 0;
         for (short i = 0; i != c; i++) {
             short o = (short) (P_MEM + 1 + i * 16);
             short isSelf = Bytes.equal(p, o, p, P_SELF, (short) 16);
@@ -543,9 +543,9 @@ final class Transfer {
             }
             if (Bytes.equal(p, o, p, P_CAND, (short) 16) == Const.CHECK_OK) {
                 found = i;
-                slot = (short) (i - nonSelf);
+                slot = (short) (i - selvesBefore);
             }
-            nonSelf += isSelf == Const.CHECK_OK ? (short) 1 : (short) 0;
+            selvesBefore += isSelf == Const.CHECK_OK ? (short) 1 : (short) 0;
         }
         if (found < 0) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
@@ -571,7 +571,6 @@ final class Transfer {
     private static short seedOff(short dataOff) {
         return (short) (dataOff + 1);
     }
-
 
     /**
      * §9.14 check 1: {@code CMAC(K_tm, ct)} into {@link Mem#H}[0..16), compared with the tag in
