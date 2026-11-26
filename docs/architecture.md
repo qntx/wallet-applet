@@ -543,8 +543,10 @@ card of `REALCARD.md`, never a production batch.
 Rows 1–9 are the admission items of `protocol.md` §3. Evidence lands under `-PrealCardOut`
 (default `tests/build/realcard/`): the `*.json`/`*.bin` reports above plus `apdu.log`,
 `gp-*.log` and `cplc.bin`, which feed the batch record. A run with a reader ends with
-`record.txt` (the `realCardRecord` task, `finalizedBy` `realCard`): the run's CAP sha256,
-reader, per-class `PASS`/`FAIL`/`SKIP` and the timing table — committed as
+`record.txt` (the `realCardRecord` task, `finalizedBy` `realCard`): the `record 3`
+format — the run's CAP sha256, commit, the five `tree-*` lines of `tests`/`applet`/
+`host`/`sim`/`buildSrc`, the effective run parameters, reader, the card's identity
+files, totals, per-class `PASS`/`SKIP` verdicts and the timing table — committed as
 `realcard/<cap-sha256>.txt` before a tag (§12). Audit-impl ran admission 1–5 and 7 on
 development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPLC IC type
 `D321`, batch `2092`) and they passed
@@ -596,7 +598,9 @@ behaviour is UNVERIFIED.
   size report. Actions pinned by commit SHA, `permissions: contents: read`.
 - `release.yml` (tags `v*`): a `gate` job runs `ci.yml` on the tagged commit; the release job
   then checks tag = version, requires a committed `realcard/<cap-sha256>.txt` record for the
-  CAP hash with `failed 0` and `InstallRealCardTest` PASS, rebuilds `build/dist/` with
+  CAP hash that is consistent with the tag — the commit an ancestor of HEAD, the five
+  `tree-*` lines the tagged trees, `params` the release parameters, `failed 0`, SKIP only
+  for `Flow`/`Nvm`/`Tearing` and `InstallRealCardTest` PASS — rebuilds `build/dist/` with
   toolchain auto-download off, re-proves the CAP reproducible, verifies `SHA256SUMS` and
   uploads `qntx-card.cap`, `card-sim.jar`, `vectors.zip`, the `tools` distribution, the
   CycloneDX SBOM; build provenance via `actions/attest-build-provenance`; release notes list

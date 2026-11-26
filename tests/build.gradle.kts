@@ -304,13 +304,14 @@ tasks.register<Test>("realCard") {
 }
 
 // Release evidence (realcard/, release.yml): after a realCard run with a reader, distil
-// the run's JUnit XML into <realCardOut>/record.txt in the `qntx-card real-card record 2`
-// format — the CAP and git trees the run bound, the card's identity files, totals, one
-// verdict line per suite.txt class with its skip reasons, then the timing table — for
-// commit as realcard/<cap-sha256>.txt. The task refuses to write a record a checker
-// could accept for anything but this run: the git tree under tests/ and applet/ must be
-// clean and every file it reads must be stamped by this run. Without -PrealCard no
-// reader was present and the record must not be written.
+// the run's JUnit XML into <realCardOut>/record.txt in the `qntx-card real-card record 3`
+// format — the CAP, the commit and the git trees the run bound, the effective run
+// parameters, the card's identity files, totals, one verdict line per suite.txt class
+// with its skip reasons, then the timing table — for commit as
+// realcard/<cap-sha256>.txt. The task refuses to write a record a checker could accept
+// for anything but this run: the git trees under tests/, applet/, host/, sim/ and
+// buildSrc/ must be clean and every file it reads must be stamped by this run. Without
+// -PrealCard no reader was present and the record must not be written.
 val realCardRecord by tasks.registering {
     group = "verification"
     description =
@@ -318,6 +319,8 @@ val realCardRecord by tasks.registering {
         " -PrealCard."
     val readerProp = providers.gradleProperty("realCard")
     val capProp = providers.gradleProperty("realCardCap")
+    val memCapProp = providers.gradleProperty("realCardMemCap")
+    val probeCapProp = providers.gradleProperty("realCardProbeCap")
     val outProp = providers.gradleProperty("realCardOut")
     onlyIf("no reader run: -PrealCard is absent") { readerProp.isPresent }
     doLast {
@@ -337,10 +340,11 @@ val realCardRecord by tasks.registering {
             check(p.waitFor() == 0) { "git ${a.joinToString(" ")} failed: $out" }
             return out
         }
-        val dirty = git("status", "--porcelain", "--", "tests", "applet")
+        val dirty =
+            git("status", "--porcelain", "--", "tests", "applet", "host", "sim", "buildSrc")
         check(dirty.isEmpty()) {
-            "cannot write the real-card record: the git tree has changes under tests/" +
-                " or applet/:\n$dirty"
+            "cannot write the real-card record: the git tree has changes under tests/," +
+                " applet/, host/, sim/ or buildSrc/:\n$dirty"
         }
         val outDir =
             outProp
@@ -444,14 +448,30 @@ val realCardRecord by tasks.registering {
             }
         }
         val hex = { f: File -> f.readBytes().joinToString("") { "%02x".format(it) } }
+
+        // the effective run parameters of the realCard task — the checker accepts a
+        // record only for the release values (RealCardCheck.RELEASE_PARAMS)
+        fun prop(name: String): String? = providers.gradleProperty(name).orNull
+        val params =
+            "differential=" + (prop("realCardDifferential") ?: "1000") +
+                " sequences=" + (prop("realCardSequences") ?: "80") +
+                " prims=" + (prop("realCardPrims")?.ifBlank { null } ?: "all") +
+                " keep=" + (prop("realCardKeep") != null) +
+                " cap=" + (if (capProp.isPresent) "prebuilt" else "tree") +
+                " memcap=" + (if (memCapProp.isPresent) "prebuilt" else "tree") +
+                " probecap=" + (if (probeCapProp.isPresent) "prebuilt" else "tree")
         val record = File(outDir, "record.txt")
         val text =
             buildString {
-                append("qntx-card real-card record 2\n")
+                append("qntx-card real-card record 3\n")
                 append("cap ").append(capSha).append('\n')
                 append("commit ").append(git("rev-parse", "HEAD")).append('\n')
                 append("tree-tests ").append(git("rev-parse", "HEAD:tests")).append('\n')
                 append("tree-applet ").append(git("rev-parse", "HEAD:applet")).append('\n')
+                append("tree-host ").append(git("rev-parse", "HEAD:host")).append('\n')
+                append("tree-sim ").append(git("rev-parse", "HEAD:sim")).append('\n')
+                append("tree-buildSrc ").append(git("rev-parse", "HEAD:buildSrc")).append('\n')
+                append("params ").append(params).append('\n')
                 append("date ").append(runStart).append('\n')
                 append("reader ").append(readerProp.get()).append('\n')
                 append("atr ").append(fromRun("atr.txt").readText().trim()).append('\n')
@@ -496,12 +516,13 @@ val realCardRecord by tasks.registering {
     }
 }
 
-// release.yml runs this on the tag: realcard/<sha256 of the released CAP>.txt must prove
-// a passing bound run — the record's cap, git trees, failure count and class lines are
-// checked by org.qntx.card.RealCardCheck.
+// release.yml runs this on the tag: realcard/<sha256 of the released CAP>.txt must be
+// consistent with this build — the record's cap, commit, five git trees, run parameters,
+// failure count and class lines are checked by org.qntx.card.RealCardCheck.
 tasks.register<JavaExec>("checkRealCardRecord") {
     group = "verification"
-    description = "Fails unless realcard/<cap-sha256>.txt proves a passing bound run (§10)."
+    description =
+        "Fails unless realcard/<cap-sha256>.txt is consistent with this build (§10)."
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.qntx.card.RealCardCheck")
     dependsOn(tasks.named("testClasses"))

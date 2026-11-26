@@ -1,8 +1,8 @@
 # Before tagging, a real-card record for the CAP this tag produces MUST be committed
 # under realcard/<cap-sha256>.txt (the realCardRecord task writes it after a passing
-# ./gradlew :tests:realCard -PrealCard=<reader> run, in the `record 2` format bound to
-# the run's git trees and files); the release job refuses a tag whose record the
-# :tests:checkRealCardRecord gate rejects.
+# ./gradlew :tests:realCard -PrealCard=<reader> run, in the `record 3` format bound to
+# the run's commit, five git trees, parameters and files); the release job refuses a
+# tag whose record the :tests:checkRealCardRecord gate rejects.
 name: Release
 
 on:
