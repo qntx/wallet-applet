@@ -47,6 +47,15 @@ public class SimulatorSystem {
     private static final ThreadLocal<SimulatorRuntime> currentRuntime = new ThreadLocal<SimulatorRuntime>();
 
     /**
+     * Largest delivery one <code>APDU.receiveBytes</code> call returns; 0 = single
+     * delivery, the default. Shared rather than an APDUProxy field because the
+     * build merges APDUProxy into javacard.framework.APDU, which would copy a
+     * proxy-owned static into a second, disconnected field.
+     */
+    public static short receiveChunk;
+
+
+    /**
      * the default instance. Used by <code>Simulator</code>
      */
     public static final SimulatorRuntime DEFAULT_RUNTIME;

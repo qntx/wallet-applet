@@ -4,6 +4,7 @@ package org.qntx.card.sim;
 
 import com.licel.jcardsim.base.SimulatorRuntime;
 import com.licel.jcardsim.crypto.ByteContainer;
+import com.licel.jcardsim.framework.APDUProxy;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -147,9 +148,22 @@ public final class CardRuntime extends SimulatorRuntime {
         }
     }
 
+    /** Largest chunk one {@code APDU.receiveBytes} call delivers; 0 = single delivery. */
+    private short receiveChunk;
+
+    /**
+     * Sim switch for the multi-block receive path (§16.3): {@code APDU.receiveBytes} delivers at
+     * most {@code n} bytes per call while this command runs; {@code n ≤ 0} restores single
+     * delivery.
+     */
+    void receiveChunk(int n) {
+        receiveChunk = (short) n;
+    }
+
     void startCommand() {
         writes = 0;
         commits.clear();
+        APDUProxy.setReceiveChunk(receiveChunk);
         Arrays.fill(digestCalls, 0);
         Arrays.fill(digestBytes, 0);
         Arrays.fill(digestResets, 0);

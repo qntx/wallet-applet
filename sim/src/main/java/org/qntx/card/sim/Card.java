@@ -96,6 +96,15 @@ public final class Card {
         runtime.armTear(n);
     }
 
+    /**
+     * Makes {@code APDU.receiveBytes} deliver at most {@code n} bytes per call from the next
+     * command on, so the applet's multi-block receive loop is exercised; {@code n ≤ 0} restores
+     * single delivery.
+     */
+    public void receiveChunk(int n) {
+        runtime.receiveChunk(n);
+    }
+
     /** Power cycle: clears reset/deselect transient state and selection. */
     public void powerCycle() {
         runtime.reset();
