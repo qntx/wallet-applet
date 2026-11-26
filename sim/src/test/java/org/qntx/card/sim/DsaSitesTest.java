@@ -14,10 +14,10 @@ import org.qntx.card.sim.probe.DsaProbe;
 
 /**
  * The {@code #d}/{@code #s}/{@code #a} sites the agent weaves under {@code dsa=} and the {@link
- * Fault#SITE_TAKE}/{@link Fault#SITE_FALL}/{@link Fault#SITE_FORCED} modes of the branch and
- * invoke sites (architecture §6): each test faults one site of {@link DsaProbe} and asserts the
- * faulted value, branch or store actually reaches the response. The watchdog's {@link Fault.Hang}
- * is proven on a loop armed below its site-hit count.
+ * Fault#SITE_TAKE}/{@link Fault#SITE_FALL}/{@link Fault#SITE_FORCED} modes of the branch and invoke
+ * sites (architecture §6): each test faults one site of {@link DsaProbe} and asserts the faulted
+ * value, branch or store actually reaches the response. The watchdog's {@link Fault.Hang} is proven
+ * on a loop armed below its site-hit count.
  */
 final class DsaSitesTest {
 

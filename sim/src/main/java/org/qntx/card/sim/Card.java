@@ -106,8 +106,8 @@ public final class Card {
     }
 
     /**
-     * Sim switch: {@code APDU.receiveBytes} returns 0 from the next command on — a transport
-     * that delivers nothing (§16.3); the applet's bounded receive loop must end in 6F00.
+     * Sim switch: {@code APDU.receiveBytes} returns 0 from the next command on — a transport that
+     * delivers nothing (§16.3); the applet's bounded receive loop must end in 6F00.
      */
     public void receiveStall(boolean stall) {
         runtime.receiveStall(stall);

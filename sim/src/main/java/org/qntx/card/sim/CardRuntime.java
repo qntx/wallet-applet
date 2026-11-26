@@ -151,6 +151,7 @@ public final class CardRuntime extends SimulatorRuntime {
 
     /** Largest chunk one {@code APDU.receiveBytes} call delivers; 0 = single delivery. */
     private short receiveChunk;
+
     private boolean stall;
 
     /**

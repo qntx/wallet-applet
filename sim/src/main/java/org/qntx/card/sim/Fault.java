@@ -206,6 +206,9 @@ public final class Fault {
 
     private static void hit() {
         if (hitBudget != 0 && ++hits > hitBudget) {
+            // a fired watchdog disarms itself: a Hang escaping the attempt must not leave the
+            // JVM armed for the next run's first site hit
+            hitBudget = 0;
             throw new Hang();
         }
     }
@@ -223,11 +226,14 @@ public final class Fault {
 
     /**
      * Turns call counting on ({@link #calls}) without arming a fault; {@link #reset} turns it off.
+     * A counting run also clears any stale watchdog: counting is not an attempt.
      */
     public static void countCalls() {
         armed.clear();
         counts.clear();
         sites.clear();
+        hitBudget = 0;
+        hits = 0;
         active = true;
     }
 

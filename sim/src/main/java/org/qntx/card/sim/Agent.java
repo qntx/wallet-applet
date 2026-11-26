@@ -14,6 +14,7 @@ import java.lang.classfile.Label;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.MethodTransform;
 import java.lang.classfile.Opcode;
+import java.lang.classfile.TypeKind;
 import java.lang.classfile.instruction.ArrayLoadInstruction;
 import java.lang.classfile.instruction.ArrayStoreInstruction;
 import java.lang.classfile.instruction.BranchInstruction;
@@ -25,13 +26,12 @@ import java.lang.classfile.instruction.InvokeInstruction;
 import java.lang.classfile.instruction.LoadInstruction;
 import java.lang.classfile.instruction.LocalVariable;
 import java.lang.classfile.instruction.LocalVariableType;
-import java.lang.classfile.instruction.OperatorInstruction;
-import java.lang.classfile.instruction.StoreInstruction;
 import java.lang.classfile.instruction.NewMultiArrayInstruction;
 import java.lang.classfile.instruction.NewPrimitiveArrayInstruction;
 import java.lang.classfile.instruction.NewReferenceArrayInstruction;
+import java.lang.classfile.instruction.OperatorInstruction;
+import java.lang.classfile.instruction.StoreInstruction;
 import java.lang.classfile.instruction.SwitchCase;
-import java.lang.classfile.TypeKind;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.instrument.ClassFileTransformer;
@@ -67,19 +67,19 @@ import java.util.Set;
  * {@code <clinit>} excluded — is additionally guarded by {@link Fault#site}: the woven lookup
  * switch runs the instruction normally, skips it (operands and receiver popped, the zero value of
  * the return type pushed), forces the branch taken or falls through, runs the negated branch, or —
- * for an invoke returning {@code short}/{@code byte}/{@code boolean} — pushes an armed value.
- * Site keys are {@code "Class.method#b<k>"} for the k-th branch and {@code "Class.method#i<k>}" for
- * the k-th invoke of the original method body in bytecode order; an overloaded method name gets a
+ * for an invoke returning {@code short}/{@code byte}/{@code boolean} — pushes an armed value. Site
+ * keys are {@code "Class.method#b<k>"} for the k-th branch and {@code "Class.method#i<k>}" for the
+ * k-th invoke of the original method body in bytecode order; an overloaded method name gets a
  * {@code #d<hash>} descriptor suffix so keys stay unique. The guard's fast path while nothing is
  * armed or counted is one volatile read.
  *
  * <p>An {@code dsa=<Class|Class.method>}-list token (entries joined by {@code |}) additionally
  * weaves the data/store/arithmetic sites of architecture §6 into just those methods: every
- * int-category load (local, array element, int constant, field) passes through {@link
- * Fault#data} — {@code "…#d<k>"} sites, faulted to ZERO/ONES/FLIP — and every local store, {@code
- * iinc}, {@code bastore}/{@code sastore}/{@code castore} and int arithmetic instruction is
- * guarded — {@code "…#s<k>"} and {@code "…#a<k>"} sites that skip the store or keep the left
- * operand. {@link #siteKinds()} reports each woven site's kind and, for invokes, its return type.
+ * int-category load (local, array element, int constant, field) passes through {@link Fault#data} —
+ * {@code "…#d<k>"} sites, faulted to ZERO/ONES/FLIP — and every local store, {@code iinc}, {@code
+ * bastore}/{@code sastore}/{@code castore} and int arithmetic instruction is guarded — {@code
+ * "…#s<k>"} and {@code "…#a<k>"} sites that skip the store or keep the left operand. {@link
+ * #siteKinds()} reports each woven site's kind and, for invokes, its return type.
  */
 public final class Agent {
 
@@ -138,8 +138,8 @@ public final class Agent {
     }
 
     /**
-     * The kinds of all woven instruction sites: {@code "b"} branch, {@code "i"} invoke (followed
-     * by the return descriptor char, e.g. {@code "iS"}), {@code "d"} data load, {@code "s"} store,
+     * The kinds of all woven instruction sites: {@code "b"} branch, {@code "i"} invoke (followed by
+     * the return descriptor char, e.g. {@code "iS"}), {@code "d"} data load, {@code "s"} store,
      * {@code "a"} arithmetic — keyed like {@link Fault#armSite}.
      */
     public static Map<String, String> siteKinds() {
@@ -202,6 +202,15 @@ public final class Agent {
                                 builder.with(element);
                                 return;
                             }
+                            // retransformation (PIT's coverage weaver re-runs every
+                            // transformer on the already woven bytes) would wrap each
+                            // guarded call a second time and shift every site index;
+                            // a method is already woven exactly when it calls the sim
+                            // package, which applet code never does on its own
+                            if (woven(m)) {
+                                builder.with(element);
+                                return;
+                            }
                             String name = m.methodName().stringValue();
                             String prefix =
                                     simple
@@ -231,6 +240,37 @@ public final class Agent {
                 throw new IllegalStateException("sim agent failed to transform " + className, e);
             }
         }
+    }
+
+    /**
+     * A method is already woven once it calls the guards the weaver emits; probes legitimately
+     * call {@code Memory}/{@code Nvm} themselves, and the instruction-replacing rewrites
+     * ({@code bastore} to {@code Nvm.sastore}) cannot fire twice anyway — only the guards
+     * appended beside an invoke are re-wrappable on retransformation.
+     */
+    private static final Set<String> WOVEN = Set.of("site", "ret", "skip", "data", "forced");
+
+    private static boolean woven(MethodModel m) {
+        return m.code()
+                .map(
+                        code ->
+                                code.elementList().stream()
+                                        .anyMatch(
+                                                el ->
+                                                        el
+                                                                        instanceof
+                                                                        InvokeInstruction inv
+                                                                && inv.method()
+                                                                        .owner()
+                                                                        .name()
+                                                                        .stringValue()
+                                                                        .equals(
+                                                                                "org/qntx/card/sim/Fault")
+                                                                && WOVEN.contains(
+                                                                        inv.method()
+                                                                                .name()
+                                                                                .stringValue())))
+                .orElse(false);
     }
 
     private static final class HookTransform implements CodeTransform {
@@ -305,9 +345,9 @@ public final class Agent {
         }
 
         /**
-         * A byte/short/char array element store — routed through {@link Nvm} for persistent
-         * arrays — is wrapped in a {@code #s} store site (architecture §6) so the logical store can
-         * be skipped: the guard pops arrayref, index and value and the {@link Nvm} call never runs.
+         * A byte/short/char array element store — routed through {@link Nvm} for persistent arrays
+         * — is wrapped in a {@code #s} store site (architecture §6) so the logical store can be
+         * skipped: the guard pops arrayref, index and value and the {@link Nvm} call never runs.
          */
         private void rewriteArrayStore(CodeBuilder builder, ArrayStoreInstruction store) {
             boolean site = weaveDsa && STORES.contains(store.opcode());
@@ -355,8 +395,7 @@ public final class Agent {
             builder.with(field);
             // a getfield/getstatic of an int-category field is a data site like any other load
             if (!weaveDsa
-                    || (field.opcode() != Opcode.GETFIELD
-                            && field.opcode() != Opcode.GETSTATIC)) {
+                    || (field.opcode() != Opcode.GETFIELD && field.opcode() != Opcode.GETSTATIC)) {
                 return;
             }
             char t = field.field().type().stringValue().charAt(0);
@@ -563,9 +602,9 @@ public final class Agent {
         }
 
         /**
-         * An int arithmetic instruction gets an {@code #a} site: on the armed occurrence the
-         * result is the left operand (the instruction's own operand for {@code ineg}) — the right
-         * operand is popped and the operator never runs.
+         * An int arithmetic instruction gets an {@code #a} site: on the armed occurrence the result
+         * is the left operand (the instruction's own operand for {@code ineg}) — the right operand
+         * is popped and the operator never runs.
          */
         private void weaveArith(CodeBuilder builder, OperatorInstruction op) {
             boolean binary = BINARY_ARITH.contains(op.opcode());
