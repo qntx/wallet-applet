@@ -237,7 +237,8 @@ and nothing else (§3 item 8).
 `install` allocates every object and writes nothing else (on the baseline chip `install` runs
 inside one platform transaction whose journal holds 5,120 B; install MUST consume at most 60 % of
 `getMaxCommitCapacity`). Initialisation then loads the domain parameters and RSA moduli of §10
-and `docs/architecture.md` §5.5 into the persistent key objects, generates `idKey` and an initial
+and `docs/architecture.md` §5.5 into the persistent key objects, writes the point `P_init` of
+§16.1 item 1 into both peer-key slots, generates `idKey` and an initial
 `linkKey`, installs a random `wrapKey`, sets `fails ← 0`, `offer = NONE`, `life = FACTORY`
 (`edCounter` is 0 from allocation) and finally writes `init ← INIT_DONE`. It runs outside any
 transaction in steps, each driven by one `GET_IDENTITY` (§14.1) and each MUST complete within
@@ -562,15 +563,17 @@ computation from the seed.
 Data: `accessHash(32)` (`Lc = 32`, else `6700`).
 
 1. Clear `verified`, wipe the session seed and the derivation caches.
-2. Read `fails` from persistent memory twice, independently, into `f_a` and `f_b`. If the
-   complement of either read disagrees: T-ERASE, return `6F00`. If `f_a ≥ L` or `f_b ≥ L`:
-   T-ERASE, return `6983`. Each test is thus evaluated twice, once per read (§16.2).
+2. Read `fails` from persistent memory three times, independently, into `f_a`, `f_b` and
+   `f_c`. If the complement of `f_a` or `f_b` disagrees: T-ERASE, return `6F00`. If `f_a ≥ L` or
+   `f_b ≥ L`: T-ERASE, return `6983`. Each test is thus evaluated twice (§16.2); `f_c` is used
+   only by step 6.
 3. If `f_a ≥ F` and `waited < W`: return `6986`. Nothing is written and the candidate is not used.
 4. `waited ← 0`.
 5. T-FAIL: `fails ← f_a + 1` with its complement; commit.
 6. Read-back gate, evaluated twice independently (§16.2), each on a fresh read `f₁` of `fails`:
-   the transaction depth is 0; `f₁` and its complement agree; `f₁ = f_b + 1`; `f₁ ≤ L`. On any
-   failure: if a transaction is open, `abortTransaction`; then T-ERASE and return `6F00`.
+   the transaction depth is 0; `f₁` and its complement agree; `f₁ = f_b + 1` in the first
+   evaluation and `f₁ = f_c + 1` in the second; `f₁ ≤ L`. On any failure: if a transaction is
+   open, `abortTransaction`; then T-ERASE and return `6F00`.
 7. Compute `match` as in §7.2, twice, independently (§16.2).
 8. Match: decrypt the seed into the session; compute `SHA-256("qntx-card/v1/fingerprint" ‖ seed)`
    and compare it with `fp` (constant time, twice); on a difference wipe the seed and return
@@ -586,12 +589,13 @@ is committed before the comparison, so a power loss after T-FAIL and before T-OK
 and the next `VERIFY` erases the wallet although the code was right. Hosts therefore ask the user
 to keep the card in the field for the whole duration of a `VERIFY` answered with `tries = 1`.
 A fault that skips the write or the commit of T-FAIL is caught at step 6 because the value must
-equal `f_b + 1` and the transaction must be closed (JCRE 3.2 §7.2: an uncommitted update reads
-back as its new value). The value written comes from `f_a` and the value expected from the
-independent read `f_b`, so a single data fault that alters either local copy after its
-complement check, or the value written, makes the gate fail; rolling the count back needs a
-second, matching fault (T-L3). A forced match without the right code decrypts garbage, which
-fails the fingerprint, so T-OK is not reached. A skipped wait gives one attempt without waiting;
+equal `f_b + 1` (and, in the second evaluation, `f_c + 1`) and the transaction must be closed
+(JCRE 3.2 §7.2: an uncommitted update reads back as its new value). The value written comes
+from `f_a` and the values expected from the independent reads `f_b` and `f_c`, so a single data
+fault that alters either local copy after its complement check, or the value written, makes the
+gate fail; rolling the count back needs a second and a third, matching fault (T-L3). A forced
+match without the right code decrypts garbage, which fails the fingerprint, so T-OK is not
+reached. A skipped wait gives one attempt without waiting;
 the number of comparisons is still bounded by `L`. When the gate fails with a transaction still
 open (a skipped `commitTransaction`), the abort restores `f_a` before T-ERASE begins its own
 transaction (`beginTransaction` throws while one is open).
@@ -1048,13 +1052,27 @@ Commands (`CLA = 0x00`, else `6E00`); the selected file is transient and reset b
 
 1. Every change of a field of §4.2 happens in the transaction §4.3 names for it, and in no other
    command. No transaction nests or spans commands. The only other persistent writes are
-   `setW` on public-key objects that hold no state and no secret (the four rotating ECDSA
-   verification keys of `SIGN_ECDSA`, and the two peer-key slots used to verify `sig_T` and
-   `sig_S` in `EXPORT` and `IMPORT`); they happen outside any transaction, and a torn write only
-   makes the current verification fail (`6F00` or `6A80`), never changes behaviour later. In
-   `LOADED`, peer-key slot `k ∈ {0, 1}` holds the key of the `k`-th member other than this card,
-   in `members` order; in `BLANK`, slot 0 is used. Before `setW` the card reads the slot
-   (`getW`) and skips the write when it already holds the decompressed key.
+   `setW` on public-key objects that hold no secret (the four rotating ECDSA verification keys
+   of `SIGN_ECDSA`, and the two peer-key slots used to verify `sig_T` and `sig_S` in `EXPORT`
+   and `IMPORT`); they happen outside any transaction. The content of such a slot is never
+   trusted: a torn or skipped write leaves the previous content (an earlier verification key,
+   another member's key, or `P_init`), under which the current verification fails (`6A80`) or
+   the second evaluation's comparison with the recomputed key fails (`6F00`, §16.2 item 4); no
+   later command depends on it. No key object ever holds a point whose discrete logarithm is
+   known: initialisation writes into both peer-key slots the point `P_init = (x, y)`, where
+   `x = int(SHA-256("qntx-card/v1/peer-slot" ‖ u8(i)))` for the smallest `i ≥ 0` with `x < p` and
+   `x³ + 7` a square modulo `p`, and `y` is the even square root (`i = 0`):
+
+   ```
+   04
+   c5f15c1a0e8b16b59de48e932dba33ce55738d661a669eb1b917b910f0af9c11
+   9784ef4a1aa6d202fcdaa8516e42a10d612739f528c2d92f8e2e88a125e880fe
+   ```
+
+   In `LOADED`, peer-key slot `k ∈ {0, 1}` holds the key of the `k`-th member other than this
+   card, in `members` order; in `BLANK`, slot 0 is used. Before `setW` the card reads the slot
+   (`getW`) and writes unless the slot already holds the decompressed key; the comparison is
+   written so that its fall-through path is the write.
 2. T-FAIL is committed, the transaction depth checked to be 0 and `fails` read back and checked
    against the expected value, before the candidate access hash is used in any computation
    (§9.5). No response data is written to the APDU buffer while a transaction is open.
@@ -1079,7 +1097,8 @@ belongs to a past transfer or ciphertext (§3 item 7).
 
 1. `life`, `origin`, `offer`, `init`, the session flags `verified` and session-open, the
    pending-state
-   flags, and the result of every signature, MAC, certificate and fingerprint verification are
+   flags, the shadow copies of `verified` and of the pending-export state, and the result of
+   every signature, MAC, certificate and fingerprint verification are
    16-bit values from a code set whose members have pairwise Hamming distance ≥ 8 and differ from
    `0x0000` and `0xFFFF` (`docs/architecture.md` §6). `init` holds the step indices `0 … N−1`
    (including `0x0000`) until initialisation completes; only `INIT_DONE` is a code-set member
@@ -1096,20 +1115,38 @@ belongs to a past transfer or ciphertext (§3 item 7).
 4. Each of the following checks is evaluated twice, with coded results, the second evaluation
    immediately before the effect it guards: the `life` check of `PERSONALIZE`, `CREATE`,
    `OFFER`, `IMPORT` and `ERASE`; `verified` before each signature, public key, `CHANGE` effect,
-   `ERASE` effect and export payload; the equality checks of `IMPORT` in `LOADED`; the gates of
-   `VERIFY` steps 2 and 6 (in step 2 the two evaluations use the two independent reads `f_a` and
-   `f_b`). The wait check of `VERIFY` step 3 is evaluated
+   `ERASE` effect and export payload — `verified` is held in two transient words with different
+   codes (`VERIFIED_YES` and `VERIFIED_SHADOW`); the dispatch gate and the first check read the
+   first word, the last check before the effect reads the second; the equality checks of
+   `IMPORT` in `LOADED`; the gates of `VERIFY` steps 2 and 6 (in step 2 the two evaluations use
+   the two independent reads `f_a` and `f_b`; in step 6 the expected values come from the
+   independent reads `f_b` and `f_c`). The wait check of `VERIFY` step 3 is evaluated
    once: skipping it saves one wait and cannot raise the number of comparisons above `L`.
    The checks that gate seed export, the peer-key slot write and seed import are evaluated twice
-   by independent recomputation — the second evaluation repeats the verification, MAC
-   computation, membership lookup or state read; it never re-tests a stored result: in `EXPORT`
-   `P1 = 0x00` the certificate, membership and `sig_T` checks, recomputed before `sig_S`, the
-   pending export keys and `E` are produced; in `EXPORT` `P1 = 0x01` the pending-export check,
-   before the payload is encrypted; in `IMPORT` `P1 = 0x00` the certificate and — in `LOADED` —
-   the membership check, before the peer-key slot write, and `sig_S`, before the pending import
-   keys are derived; in `IMPORT` `P1 = 0x01` the MAC check, before the payload is decrypted. A
-   signature verification's coded result is derived from the engine's boolean through two
-   independent conditionals, so one skipped branch cannot yield the success value. Ending a
+   by independent recomputation: the second evaluation recomputes its inputs from the command
+   data and the persistent state: it reuses no result, boolean, flag, transient word or hash of
+   the first, and uses a peer-key slot only after comparing its content with the key recomputed
+   from the certificate. In `EXPORT` `P1 = 0x00`: the certificate (hash and
+   verification repeated), membership (members re-read, IDs recomputed, the slot compared) and
+   `sig_T` (`A_T` decompressed again and compared in constant time, with a coded result, with
+   the peer-key slot read back by `getW`; the offer hash recomputed into a separate buffer; the
+   verification repeated), before `sig_S`, the pending export keys and `E` are produced. In
+   `EXPORT` `P1 = 0x01`: the pending-export state, first on the pending word and then on a
+   separate shadow word holding a different code (`PENDING_EXPORT_SHADOW`), before the payload
+   is encrypted. In `IMPORT` `P1 = 0x00`: the certificate and — in `LOADED`, with `life` read
+   again — membership, before the peer-key slot write; and `sig_S` (`A_S` decompressed again and
+   compared with the slot read back, `A` and `LK` read again, `TH` recomputed into a separate
+   buffer, the verification repeated), before the pending import keys are derived from the
+   recomputed `TH`. In `IMPORT` `P1 = 0x01`: the MAC check, before the payload is decrypted, and
+   in `LOADED` the re-seal equality checks, with `life` read again, before T-INSTALL. The inputs
+   the two evaluations of a gate still share are listed with the reason in
+   `docs/architecture.md` §6: they are persistent keys no command after T-PERSO writes (`caKey`),
+   keys derived once from an already twice-verified transcript (`K_te`/`K_tm` for the MAC), or
+   values a fault can only make fail; a single fault on any of them does not release the guarded
+   effect.
+   A signature verification's coded result is derived from the engine's boolean through two
+   independent conditionals, so one skipped branch cannot yield the success value; the boolean
+   belongs to one verification call, and the two evaluations of a gate are two calls. Ending a
    pending state (§9.2, §8.5) overwrites `K_te` and `K_tm` with fresh random values, never a
    constant, so an output produced past a bypassed pending check is under keys no one holds.
 5. Every signature is self-verified before output (§12): ECDSA with `verifyPreComputedHash`
@@ -1173,38 +1210,39 @@ host-side round trip including transport; median / p95 ms, n):
 | --- | --- | --- | --- |
 | `SELECT` | 31 | 31 | 20 |
 | `GET_IDENTITY` | 29 | 29 | 1 |
-| initialisation step (max) | 164 | 164 | 7 |
-| `PERSONALIZE` | 609 | 609 | 1 |
-| `OPEN` | 316 | 317 | 20 |
+| initialisation step (max) | 148 | 148 | 7 |
+| `PERSONALIZE` | 603 | 603 | 1 |
+| `OPEN` | 317 | 318 | 20 |
 | `STATUS` | 33 | 33 | 20 |
-| `VERIFY` right | 214 | 215 | 20 |
+| `VERIFY` right | 215 | 216 | 20 |
 | `VERIFY` wrong | 80 | 80 | 20 |
 | `WAIT` | 969 | 969 | 20 |
-| `CREATE` `P1 = 0` | 207 | 207 | 20 |
+| `CREATE` `P1 = 0` | 207 | 208 | 20 |
 | `CREATE` `P1 = 1` | 202 | 203 | 20 |
 | `ERASE` | 54 | 54 | 40 |
-| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 413 | 20 |
+| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 412 | 20 |
 | `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
 | `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
 | `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 152 | 20 |
 | `SIGN_ECDSA`, depth 5, cold | 604 | 607 | 20 |
-| `SIGN_ECDSA`, depth 5, warm | 316 | 318 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 316 | 316 | 20 |
 | `SIGN_BIP340` (tweak), cold | 1060 | 1061 | 20 |
 | `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
 | `SIGN_ED25519` begin, cold | 498 | 499 | 60 |
 | `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
-| `SIGN_ED25519` finish, cold | 670 | 673 | 60 |
-| `OFFER` first | 216 | 216 | 1 |
+| `SIGN_ED25519` finish, cold | 670 | 674 | 60 |
+| `OFFER` first | 217 | 217 | 1 |
 | `OFFER` valid | 163 | 163 | 20 |
-| `EXPORT` `P1 = 0x00` | 818 | 821 | 10 |
+| `EXPORT` `P1 = 0x00` | 1060 | 1064 | 10 |
 | `EXPORT` `P1 = 0x01` | 61 | 61 | 10 |
-| `IMPORT` `P1 = 0x00` | 833 | 837 | 10 |
-| `IMPORT` `P1 = 0x01` | 254 | 255 | 10 |
+| `IMPORT` `P1 = 0x00` | 1129 | 1131 | 10 |
+| `IMPORT` `P1 = 0x01` | 255 | 256 | 10 |
 
-The slowest command (`SIGN_BIP340` with a tweak, cold) has a margin of 1.4× to the limit;
-`WAIT` 1.5× (1.1× at the 1100 ms upper bound of §3 item 9). A command record costs about
+The slowest command (`IMPORT` `P1 = 0x00`, which decompresses and verifies the peer key in
+each evaluation, §16.2) has a margin of 1.3× to the limit; `WAIT` 1.5× (1.1× at the 1100 ms
+upper bound of §3 item 9). A command record costs about
 33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
-⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,396 ms cold
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,397 ms cold
 (498 + 5 × 46 + 670). `EXPORT`/`IMPORT` are timed against a member emulated by the host
 — the two-card flow on silicon is not run. `docs/architecture.md` §10 lists the real-card
 timing suite.

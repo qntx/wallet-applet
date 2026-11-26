@@ -16,9 +16,12 @@ import javacardx.crypto.Cipher;
 /**
  * The §8 secure session: OPEN (§8.1), the command/response records (§8.3–8.4), teardown (§8.5) and
  * the coded session flags (§16.2 item 1). All state is transient: four AES keys in {@code
- * CLEAR_ON_DESELECT} objects, the five record engines re-armed per session and one {@code byte[10]}
- * holding the five 16-bit words {@code open}, {@code verified}, {@code ctr}, {@code pending} and
- * {@code waited} (the plain WAIT counter of §9.15, the only uncoded word).
+ * CLEAR_ON_DESELECT} objects, the five record engines re-armed per session and one {@code byte[14]}
+ * holding the seven 16-bit words {@code open}, {@code verified}, {@code ctr}, {@code pending},
+ * {@code waited} (the plain WAIT counter of §9.15, the only uncoded word), {@code verifiedShadow}
+ * and {@code pendingExportShadow} — the second words {@code setVerified} and {@code
+ * setPendingExport} write alongside theirs so a guarded check's two evaluations never read the same
+ * flag (§16.2 item 1).
  */
 final class Session {
     /** Offsets of the 16-bit words inside {@link #words}. */
@@ -28,6 +31,8 @@ final class Session {
     private static final short O_CTR = 4;
     private static final short O_PENDING = 6;
     private static final short O_WAITED = 8;
+    private static final short O_VERIFIED_SHADOW = 10;
+    private static final short O_PENDING_SHADOW = 12;
 
     /** {@link Mem#W} layout used by {@link #unwrap} and {@link #wrap} (below {@link Mem#W_DER}). */
     private static final short W_CTR = 0;
@@ -89,7 +94,7 @@ final class Session {
         reEnc = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
         cm = Signature.getInstance(Signature.ALG_AES_CMAC_128, false);
         rm = Signature.getInstance(Signature.ALG_AES_CMAC_128, false);
-        words = JCSystem.makeTransientByteArray((short) 10, JCSystem.CLEAR_ON_DESELECT);
+        words = JCSystem.makeTransientByteArray((short) 14, JCSystem.CLEAR_ON_DESELECT);
     }
 
     private static AESKey aesKey() {
@@ -271,6 +276,7 @@ final class Session {
     void teardown() {
         short wasOpen = getWord(O_OPEN);
         setWord(O_VERIFIED, (short) 0);
+        setWord(O_VERIFIED_SHADOW, (short) 0);
         Bytes.wipe(mem.seed, (short) 0, (short) mem.seed.length);
         Bytes.wipe(mem.secpCache, (short) 0, (short) mem.secpCache.length);
         Bytes.wipe(mem.edCache, (short) 0, (short) mem.edCache.length);
@@ -297,14 +303,30 @@ final class Session {
         return v == Const.VERIFIED_YES ? Const.VERIFIED_YES : Const.VERIFIED_NO;
     }
 
+    /**
+     * Coded read of the {@code verified} shadow word (§16.2 item 1): {@code 0x0000} is the
+     * platform-cleared state, any other non-member a detected fault. {@link #setVerified} is the
+     * only writer of the member, so a first {@link #verified} evaluation forced to {@code
+     * VERIFIED_YES} cannot make this second, independent read agree.
+     */
+    short verifiedShadow() {
+        short v = getWord(O_VERIFIED_SHADOW);
+        if (v != Const.VERIFIED_SHADOW && v != 0) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        return v == Const.VERIFIED_SHADOW ? Const.VERIFIED_YES : Const.VERIFIED_NO;
+    }
+
     /** VERIFY (§9.5 step 1) and ERASE clear {@code verified} to the coded NO member. */
     void clearVerified() {
         setWord(O_VERIFIED, Const.VERIFIED_NO);
+        setWord(O_VERIFIED_SHADOW, (short) 0);
     }
 
     /** VERIFY and CREATE set {@code verified} on success (§9.2). */
     void setVerified() {
         setWord(O_VERIFIED, Const.VERIFIED_YES);
+        setWord(O_VERIFIED_SHADOW, Const.VERIFIED_SHADOW);
     }
 
     /**
@@ -384,9 +406,29 @@ final class Session {
         return p;
     }
 
+    /**
+     * Coded read of the {@code pendingExport} shadow word (§16.2 item 1): {@code 0x0000} when no
+     * export is pending, any other non-member a detected fault. {@link #setPendingExport} is the
+     * only writer of the member, so a first {@link #pending} evaluation forced to {@code
+     * PENDING_EXPORT} cannot make this second, independent read agree.
+     */
+    short pendingExportShadow() {
+        short p = getWord(O_PENDING_SHADOW);
+        if (p != Const.PENDING_EXPORT_SHADOW && p != 0) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        return p == Const.PENDING_EXPORT_SHADOW ? Const.PENDING_EXPORT : (short) 0;
+    }
+
     /** A successful {@code SIGN_ED25519} {@code P1 = 0x00} arms the stream pending state (§9.2). */
     void setPending(short code) {
         setWord(O_PENDING, code);
+    }
+
+    /** A successful {@code EXPORT} {@code P1 = 0x00} arms the export pending state (§9.2). */
+    void setPendingExport() {
+        setWord(O_PENDING, Const.PENDING_EXPORT);
+        setWord(O_PENDING_SHADOW, Const.PENDING_EXPORT_SHADOW);
     }
 
     /**
@@ -419,6 +461,7 @@ final class Session {
         mem.kTm.setKey(mem.sender, (short) 0);
         Bytes.wipe(mem.sender, (short) 0, (short) mem.sender.length);
         setWord(O_PENDING, (short) 0);
+        setWord(O_PENDING_SHADOW, (short) 0);
     }
 
     /** Coded read of the open word; a corrupt word is a fault, torn down by {@code process}. */

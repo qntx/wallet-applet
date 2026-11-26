@@ -369,7 +369,7 @@ final class FaultMutantTest {
         assertTrue(!blank());
 
         verified();
-        Fault.arm("Session.verified", 3, Const.VERIFIED_NO);
+        Fault.arm("Session.verifiedShadow", 1, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x23, 0, Vecs.accessHashNew()).sw());
         assertTrue(!blank());
     }
@@ -382,7 +382,7 @@ final class FaultMutantTest {
         assertTrue(!blank());
 
         verified();
-        Fault.arm("Session.verified", 3, Const.VERIFIED_NO);
+        Fault.arm("Session.verifiedShadow", 1, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x24, 0, new byte[0]).sw());
         assertTrue(!blank());
     }
@@ -395,7 +395,7 @@ final class FaultMutantTest {
         assertTrue(!blank());
 
         verified();
-        Fault.arm("Session.verified", 3, Const.VERIFIED_NO);
+        Fault.arm("Session.verifiedShadow", 1, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x30, 0, Vecs.pathSecpEvm()).sw());
         assertTrue(!blank());
     }
@@ -425,16 +425,15 @@ final class FaultMutantTest {
 
     @Test
     void forcedExport1VerifiedEvaluationsAreCaught() throws Exception {
-        // EXPORT P1=0x01 evaluates verified at the dispatch gate (1) and twice before
-        // the payload (2, 3): the M29 mutant — the first in-handler check deleted —
-        // leaves no third evaluation, so the eval-3 arm releases the payload on it
+        // EXPORT P1=0x01 evaluates the verified flag at the dispatch gate and twice
+        // before the payload — word then shadow word: faulting either read is caught
         pendingExport();
         Fault.arm("Session.verified", 2, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x41, 1, Vecs.accessHashNew()).sw());
         assertTrue(!blank());
 
         pendingExport();
-        Fault.arm("Session.verified", 3, Const.VERIFIED_NO);
+        Fault.arm("Session.verifiedShadow", 1, Const.VERIFIED_NO);
         assertEquals(0x6F00, inner(0x41, 1, Vecs.accessHashNew()).sw());
         assertTrue(!blank());
     }

@@ -55,6 +55,28 @@ final class Secp256k1 {
         (byte) 0x8F, (byte) 0xFB, (byte) 0x10, (byte) 0xD4, (byte) 0xB8,
     };
 
+    /**
+     * The nothing-up-my-sleeve point both peer-key slots hold until a member's key is written
+     * (§16.1 item 1): the first {@code i = 0, 1, …} with {@code x = int(SHA-256("qntx-card/v1/
+     * peer-slot" ‖ u8(i))) < p} and {@code x³ + 7} a quadratic residue mod {@code p}, {@code y} the
+     * even root ({@code i = 0}). No key slot holds {@link #G} or any other point whose discrete
+     * logarithm is known, so a slot a skipped write leaves behind never verifies a signature an
+     * attacker can make.
+     */
+    static final byte[] PEER_INIT = {
+        (byte) 0x04, (byte) 0xC5, (byte) 0xF1, (byte) 0x5C, (byte) 0x1A, (byte) 0x0E,
+        (byte) 0x8B, (byte) 0x16, (byte) 0xB5, (byte) 0x9D, (byte) 0xE4, (byte) 0x8E,
+        (byte) 0x93, (byte) 0x2D, (byte) 0xBA, (byte) 0x33, (byte) 0xCE, (byte) 0x55,
+        (byte) 0x73, (byte) 0x8D, (byte) 0x66, (byte) 0x1A, (byte) 0x66, (byte) 0x9E,
+        (byte) 0xB1, (byte) 0xB9, (byte) 0x17, (byte) 0xB9, (byte) 0x10, (byte) 0xF0,
+        (byte) 0xAF, (byte) 0x9C, (byte) 0x11, (byte) 0x97, (byte) 0x84, (byte) 0xEF,
+        (byte) 0x4A, (byte) 0x1A, (byte) 0xA6, (byte) 0xD2, (byte) 0x02, (byte) 0xFC,
+        (byte) 0xDA, (byte) 0xA8, (byte) 0x51, (byte) 0x6E, (byte) 0x42, (byte) 0xA1,
+        (byte) 0x0D, (byte) 0x61, (byte) 0x27, (byte) 0x39, (byte) 0xF5, (byte) 0x28,
+        (byte) 0xC2, (byte) 0xD9, (byte) 0x2F, (byte) 0x8E, (byte) 0x2E, (byte) 0x88,
+        (byte) 0xA1, (byte) 0x25, (byte) 0xE8, (byte) 0x80, (byte) 0xFE,
+    };
+
     /** Group order {@code n}. */
     static final byte[] N = {
         (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,

@@ -354,7 +354,7 @@ final class NdefTest {
         assertNotEquals(0, stream[0] | stream[1] | stream[64], "no live stream before SELECT");
         assertArrayEquals(Spec.SW_OK, card.transmit(Spec.SELECT_NDEF));
         assertEquals(0, card.writes(), "the deselect teardown writes nothing persistent");
-        assertArrayEquals(new byte[10], Internals.words(wallet), "session words not cleared");
+        assertArrayEquals(new byte[14], Internals.words(wallet), "session words not cleared");
         byte[] key = new byte[16];
         for (String name : new String[] {"kce", "kcm", "kre", "krm"}) {
             Internals.sessionKey(wallet, name).getKey(key, (short) 0);

@@ -149,7 +149,7 @@ final class SessionDirectTest {
         w[4] = 0;
         w[5] = 7;
         s.teardown();
-        assertArrayEquals(new byte[10], w);
+        assertArrayEquals(new byte[14], w);
         byte[] key = new byte[16];
         for (String name : new String[] {"kce", "kcm", "kre", "krm"}) {
             AESKey k = Internals.sessionKey(applet, name);
@@ -183,6 +183,6 @@ final class SessionDirectTest {
         w[4] = (byte) 0xFF;
         w[5] = (byte) 0xFF;
         s.afterResponse(ISO7816.SW_NO_ERROR);
-        assertArrayEquals(new byte[10], w);
+        assertArrayEquals(new byte[14], w);
     }
 }

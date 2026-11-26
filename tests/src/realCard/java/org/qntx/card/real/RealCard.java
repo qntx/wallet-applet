@@ -132,8 +132,12 @@ public final class RealCard implements AutoCloseable {
         return HexFormat.of().formatHex(card.getATR().getBytes()).toUpperCase();
     }
 
-    private void checkAtr() {
+    private void checkAtr() throws IOException {
         String atr = atr();
+        // the observed ATR lands next to cplc.bin/identify.bin for the record (§10)
+        Files.write(
+                out.resolve("atr.txt"),
+                (atr + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
         if (!atr.equals(EXPECTED_ATR)) {
             throw new IllegalStateException(
                     "card ATR " + atr + " is not card A (" + EXPECTED_ATR + ") — stopping");

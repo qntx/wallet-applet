@@ -57,7 +57,8 @@ final class SpofExportPendingTest {
         ReviewSession s = c.create(S0, H0, m.cardId);
         try {
             // the full call count needs a genuine pending export: the check at the top
-            // (6985) plus the recomputation before the payload is encrypted = 2
+            // (6985) on the pending word plus the recomputation before the payload is
+            // encrypted on the shadow word — two different methods now
             assertEquals(
                     0x9000,
                     s.cmd((byte) 0x41, (byte) 0x00, (byte) 0, m.exportRequest()).sw,
@@ -66,17 +67,20 @@ final class SpofExportPendingTest {
             Inner ok = s.cmd((byte) 0x41, (byte) 0x01, (byte) 0, HT);
             assertEquals(0x9000, ok.sw, "dry-run genuine EXPORT P1=0x01");
             int calls = Fault.calls("Session.pending");
-            assertEquals(2, calls, "the gate and its recomputation");
+            assertEquals(1, calls, "the gate read; the recomputation is on the shadow word");
             Fault.reset();
 
-            for (int i = 1; i <= calls; i++) {
-                Fault.arm("Session.pending", i, PENDING_EXPORT);
+            // the pending word's gate eval and the shadow word's recomputation, each
+            // faulted alone — the other read still refuses
+            String[] methods = {"Session.pending", "Session.pendingExportShadow"};
+            for (int i = 0; i < methods.length; i++) {
+                Fault.arm(methods[i], 1, PENDING_EXPORT);
                 Inner e1 = s.cmd((byte) 0x41, (byte) 0x01, (byte) 0, HT);
                 Fault.reset();
                 assertTrue(
                         e1.sw == 0x6985 || e1.sw == 0x6F00,
                         "pending eval "
-                                + i
+                                + (i + 1)
                                 + " forced PENDING_EXPORT must be refused, was "
                                 + String.format("%04X", e1.sw));
                 if (e1.sw == 0x6F00) {
@@ -87,7 +91,7 @@ final class SpofExportPendingTest {
                     assertEquals(
                             0x6985,
                             s.cmd((byte) 0x41, (byte) 0x01, (byte) 0, HT).sw,
-                            "eval " + i + " left a pending export");
+                            "eval " + (i + 1) + " left a pending export");
                 }
             }
         } finally {
@@ -106,7 +110,7 @@ final class SpofExportPendingTest {
             // keys were overwritten with fresh random values at the end of the last
             // pending state, so what comes out is ct ‖ tag under keys nobody holds
             Fault.arm("Session.pending", 1, PENDING_EXPORT);
-            Fault.arm("Session.pending", 2, PENDING_EXPORT);
+            Fault.arm("Session.pendingExportShadow", 1, PENDING_EXPORT);
             Inner e1 = s.cmd((byte) 0x41, (byte) 0x01, (byte) 0, HT);
             Fault.reset();
             assertEquals(0x9000, e1.sw, "both evaluations faulted releases a record");

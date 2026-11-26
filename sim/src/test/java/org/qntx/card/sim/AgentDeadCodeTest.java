@@ -62,7 +62,7 @@ final class AgentDeadCodeTest {
         // sanity: the patched mutant itself is a valid class, like PIT's hotswap payload
         assertDoesNotThrow(() -> new Def().define(mutant));
         byte[] woven =
-                new Agent.AppletTransformer(Set.of("org/qntx/card/sim/probe"))
+                new Agent.AppletTransformer(Set.of("org/qntx/card/sim/probe"), false)
                         .transform(
                                 AgentDeadCodeTest.class.getClassLoader(),
                                 "org/qntx/card/sim/probe/DeadProbe",

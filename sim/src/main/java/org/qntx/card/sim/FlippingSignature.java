@@ -12,7 +12,9 @@ import javacard.security.Signature;
  * DER signature written ({@code s}'s trailing byte XOR {@code 0x01}). Wrapping unconditionally is
  * what lets arming act on the engines an applet created at install — the corrupted output is what a
  * faulted crypto chip could emit, so the applet's self-verify before output (spec/protocol.md §9.9)
- * is what the injected fault exercises.
+ * is what the injected fault exercises. The same wrapper lets {@link Fault#armVerifyTrue} force a
+ * {@code verify} call to succeed regardless of the signature, a data fault on the coded result's
+ * engine boolean.
  */
 final class FlippingSignature extends Signature {
 
@@ -98,7 +100,8 @@ final class FlippingSignature extends Signature {
             byte[] sigBuff,
             short sigOffset,
             short sigLength) {
-        return inner.verify(inBuff, inOffset, inLength, sigBuff, sigOffset, sigLength);
+        return Fault.verifyTrue()
+                || inner.verify(inBuff, inOffset, inLength, sigBuff, sigOffset, sigLength);
     }
 
     public boolean verifyPreComputedHash(
@@ -108,7 +111,8 @@ final class FlippingSignature extends Signature {
             byte[] sigBuff,
             short sigOffset,
             short sigLength) {
-        return inner.verifyPreComputedHash(
-                hashBuff, hashOffset, hashLength, sigBuff, sigOffset, sigLength);
+        return Fault.verifyTrue()
+                || inner.verifyPreComputedHash(
+                        hashBuff, hashOffset, hashLength, sigBuff, sigOffset, sigLength);
     }
 }

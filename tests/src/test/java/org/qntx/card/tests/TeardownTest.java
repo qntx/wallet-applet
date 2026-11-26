@@ -26,7 +26,7 @@ final class TeardownTest {
 
     private static void assertDead(Card card) {
         Applet applet = card.applet(Spec.WALLET_AID);
-        assertArrayEquals(new byte[10], Internals.words(applet), "session words not cleared");
+        assertArrayEquals(new byte[14], Internals.words(applet), "session words not cleared");
         byte[] key = new byte[16];
         for (String name : KEYS) {
             AESKey k = Internals.sessionKey(applet, name);

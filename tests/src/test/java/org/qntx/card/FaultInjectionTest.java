@@ -34,7 +34,7 @@ final class FaultInjectionTest {
     }
 
     private static void assertDead(Card card) {
-        assertArrayEquals(new byte[10], Internals.words(card.applet(Spec.WALLET_AID)));
+        assertArrayEquals(new byte[14], Internals.words(card.applet(Spec.WALLET_AID)));
     }
 
     @Test

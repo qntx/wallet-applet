@@ -170,13 +170,18 @@ per-row `*.json`/`*.bin` reports (`init.json`, `install-journal.json`, `commit-c
 `rng.json`, `memory.json`, `timing.json`/`timing.md`, `signatures.json`,
 `primitives.json`/`primitives.md`), which feed the batch
 record of §10. A run with a reader also writes `record.txt` (the `realCardRecord` task
-finalizes `realCard`): one `PASS`/`FAIL`/`SKIP` line per test class plus the timing table. It
-is copied to [`realcard/<cap-sha256>.txt`](realcard/) and committed before a release tag —
+finalizes `realCard`, and only on a clean `tests/` + `applet/` tree with every input file
+stamped by that run): the `qntx-card real-card record 2` format — CAP sha256, the `tests/` and
+`applet/` git trees, ATR/CPLC/IDENTIFY, totals and one `PASS`/`FAIL`/`SKIP` line per
+`suite.txt` class — then the timing table. It is copied to
+[`realcard/<cap-sha256>.txt`](realcard/) and committed before a release tag —
 `release.yml` refuses the tag without it.
 
 Without `-PrealCard` every test still skips as "not run"; the table below is the suite's own
-`timing.md` from the final card-A run (2026-11-24, ACS ACR1552 1S CL Reader PICC, contactless;
-CAP sha256 `c66a8b9956c819bcd24ce2ad541c616f64799940df23a6a7e5d77cc1a70ef4dd`). EXPORT/IMPORT
+`timing.md` of the run recorded in
+[`realcard/39cc8dac35d46327c07b9df03c75dbbb4c59d3cc8957c987c9fdd5246ea9a436.txt`](realcard/39cc8dac35d46327c07b9df03c75dbbb4c59d3cc8957c987c9fdd5246ea9a436.txt)
+(2026-11-25 UTC, ACS ACR1552 1S CL Reader PICC, contactless; CAP sha256
+`39cc8dac35d46327c07b9df03c75dbbb4c59d3cc8957c987c9fdd5246ea9a436`). EXPORT/IMPORT
 are timed against a host-emulated member card (`EmuMember`, test CA) — only one card exists,
 so the peer's crypto runs on the host, off the card's clock.
 
@@ -184,50 +189,50 @@ so the peer's crypto runs on the host, off the card's clock.
 
 | command | n | min | median | p95 | max | bound ms | ≤bound |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| INIT_STEP | 7 | 29.3 | 59.8 | 164.1 | 164.1 | 500 | yes |
-| GET_IDENTITY | 1 | 29.3 | 29.3 | 29.3 | 29.3 | 1500 | yes |
-| PERSONALIZE | 1 | 608.9 | 608.9 | 608.9 | 608.9 | 1500 | yes |
-| OPEN | 20 | 313.3 | 316.1 | 316.6 | 317.0 | 1500 | yes |
-| VERIFY wrong | 20 | 79.1 | 79.5 | 79.6 | 79.6 | 1500 | yes |
-| VERIFY right | 20 | 213.8 | 214.3 | 214.6 | 217.4 | 1500 | yes |
-| STATUS | 20 | 33.0 | 33.2 | 33.4 | 33.8 | 1500 | yes |
-| PUBLIC_KEY secp depth3 cold | 20 | 236.8 | 237.3 | 237.4 | 237.6 | 1500 | yes |
-| PUBLIC_KEY secp depth3 warm | 20 | 124.2 | 124.6 | 125.0 | 125.0 | 1500 | yes |
-| PUBLIC_KEY secp depth5 cold | 20 | 411.7 | 412.3 | 412.5 | 412.7 | 1500 | yes |
-| PUBLIC_KEY secp depth5 warm | 20 | 125.1 | 125.6 | 125.8 | 125.9 | 1500 | yes |
-| PUBLIC_KEY ed25519 depth3 cold | 20 | 211.3 | 211.9 | 212.2 | 212.2 | 1500 | yes |
-| PUBLIC_KEY ed25519 depth3 warm | 20 | 149.9 | 150.3 | 150.6 | 151.0 | 1500 | yes |
-| PUBLIC_KEY ed25519 depth5 cold | 20 | 253.8 | 254.0 | 254.3 | 255.2 | 1500 | yes |
-| PUBLIC_KEY ed25519 depth5 warm | 20 | 150.9 | 151.3 | 151.6 | 151.6 | 1500 | yes |
-| SIGN_ECDSA depth5 cold | 20 | 603.1 | 603.9 | 606.7 | 611.8 | 1500 | yes |
-| SIGN_ECDSA depth5 warm | 20 | 314.1 | 315.6 | 318.3 | 318.8 | 1500 | yes |
-| SIGN_BIP340 untweaked cold | 20 | 1007.6 | 1009.7 | 1011.9 | 1012.0 | 1500 | yes |
-| SIGN_BIP340 untweaked warm | 20 | 723.0 | 726.5 | 727.4 | 727.4 | 1500 | yes |
-| SIGN_BIP340 tweak cold | 20 | 1053.5 | 1059.7 | 1060.5 | 1060.8 | 1500 | yes |
-| SIGN_BIP340 tweak warm | 20 | 768.8 | 769.8 | 770.5 | 770.6 | 1500 | yes |
-| SIGN_ED25519 begin cold | 60 | 494.3 | 498.1 | 498.5 | 498.5 | 1500 | yes |
-| SIGN_ED25519 finish cold | 60 | 668.4 | 669.8 | 673.1 | 674.0 | 1500 | yes |
-| SIGN_ED25519 64B total cold | 20 | 1167.7 | 1171.1 | 1171.6 | 1172.0 | — | — |
-| SIGN_ED25519 begin warm | 60 | 410.6 | 415.9 | 416.3 | 416.7 | 1500 | yes |
-| SIGN_ED25519 finish warm | 60 | 667.6 | 669.7 | 670.3 | 670.4 | 1500 | yes |
-| SIGN_ED25519 64B total warm | 20 | 1085.7 | 1086.1 | 1086.6 | 1086.7 | — | — |
-| SIGN_ED25519 update | 880 | 43.5 | 46.1 | 46.4 | 47.0 | 1500 | yes |
-| SIGN_ED25519 1232B total cold | 20 | 1395.3 | 1396.4 | 1397.0 | 1397.4 | — | — |
-| SIGN_ED25519 1232B total warm | 20 | 1313.2 | 1314.2 | 1315.1 | 1315.4 | — | — |
-| SIGN_ED25519 4032B total cold | 20 | 1937.4 | 1943.6 | 1945.5 | 1947.0 | — | — |
-| SIGN_ED25519 4032B total warm | 20 | 1855.6 | 1861.3 | 1863.5 | 1864.4 | — | — |
-| WAIT | 20 | 968.4 | 969.0 | 969.1 | 969.1 | 1500 | yes |
-| CREATE P1=0 | 20 | 206.8 | 207.0 | 207.2 | 209.3 | 1500 | yes |
-| ERASE | 40 | 53.9 | 54.1 | 54.3 | 54.4 | 1500 | yes |
-| CREATE P1=1 | 20 | 201.8 | 202.2 | 202.5 | 202.5 | 1500 | yes |
-| OFFER offer=NONE | 1 | 216.2 | 216.2 | 216.2 | 216.2 | 1500 | yes |
-| OFFER offer=VALID | 20 | 162.7 | 162.9 | 163.3 | 163.3 | 1500 | yes |
-| EXPORT P1=0 | 10 | 817.9 | 818.3 | 821.4 | 821.4 | 1500 | yes |
-| EXPORT P1=1 | 10 | 60.5 | 60.6 | 60.8 | 60.8 | 1500 | yes |
-| IMPORT P1=0 | 10 | 832.2 | 832.7 | 836.5 | 836.5 | 1500 | yes |
-| IMPORT P1=1 | 10 | 254.2 | 254.4 | 254.8 | 254.8 | 1500 | yes |
-| SELECT | 20 | 30.5 | 30.5 | 31.3 | 61.9 | 1500 | yes |
-| SELECT after reset | 20 | 31.0 | 31.1 | 31.2 | 31.9 | 1500 | yes |
+| INIT_STEP | 7 | 29.4 | 59.8 | 148.3 | 148.3 | 500 | yes |
+| GET_IDENTITY | 1 | 29.4 | 29.4 | 29.4 | 29.4 | 1500 | yes |
+| PERSONALIZE | 1 | 602.8 | 602.8 | 602.8 | 602.8 | 1500 | yes |
+| OPEN | 20 | 315.0 | 317.3 | 317.8 | 317.9 | 1500 | yes |
+| VERIFY wrong | 20 | 79.9 | 80.1 | 80.2 | 80.7 | 1500 | yes |
+| VERIFY right | 20 | 214.9 | 215.4 | 215.5 | 217.9 | 1500 | yes |
+| STATUS | 20 | 33.1 | 33.2 | 33.4 | 33.9 | 1500 | yes |
+| PUBLIC_KEY secp depth3 cold | 20 | 235.7 | 237.3 | 237.5 | 237.6 | 1500 | yes |
+| PUBLIC_KEY secp depth3 warm | 20 | 124.2 | 124.5 | 125.0 | 125.0 | 1500 | yes |
+| PUBLIC_KEY secp depth5 cold | 20 | 411.6 | 412.1 | 412.3 | 412.4 | 1500 | yes |
+| PUBLIC_KEY secp depth5 warm | 20 | 125.3 | 125.6 | 125.8 | 125.9 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 cold | 20 | 211.7 | 211.9 | 212.1 | 212.1 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 warm | 20 | 150.0 | 150.3 | 150.5 | 150.5 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 cold | 20 | 253.8 | 254.1 | 254.2 | 254.6 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 warm | 20 | 151.0 | 151.3 | 151.6 | 151.8 | 1500 | yes |
+| SIGN_ECDSA depth5 cold | 20 | 603.1 | 603.7 | 606.7 | 609.5 | 1500 | yes |
+| SIGN_ECDSA depth5 warm | 20 | 315.1 | 315.8 | 316.1 | 318.4 | 1500 | yes |
+| SIGN_BIP340 untweaked cold | 20 | 1008.1 | 1009.9 | 1012.4 | 1012.4 | 1500 | yes |
+| SIGN_BIP340 untweaked warm | 20 | 722.9 | 727.0 | 727.7 | 727.7 | 1500 | yes |
+| SIGN_BIP340 tweak cold | 20 | 1059.3 | 1060.0 | 1060.5 | 1060.9 | 1500 | yes |
+| SIGN_BIP340 tweak warm | 20 | 769.7 | 770.1 | 770.9 | 771.0 | 1500 | yes |
+| SIGN_ED25519 begin cold | 60 | 495.0 | 498.4 | 498.7 | 498.8 | 1500 | yes |
+| SIGN_ED25519 finish cold | 60 | 669.0 | 670.3 | 673.8 | 674.2 | 1500 | yes |
+| SIGN_ED25519 64B total cold | 20 | 1170.8 | 1171.9 | 1172.8 | 1173.0 | — | — |
+| SIGN_ED25519 begin warm | 60 | 415.6 | 416.1 | 416.5 | 417.0 | 1500 | yes |
+| SIGN_ED25519 finish warm | 60 | 668.8 | 670.3 | 670.9 | 671.2 | 1500 | yes |
+| SIGN_ED25519 64B total warm | 20 | 1085.7 | 1087.0 | 1087.5 | 1087.5 | — | — |
+| SIGN_ED25519 update | 880 | 43.5 | 46.0 | 46.2 | 46.9 | 1500 | yes |
+| SIGN_ED25519 1232B total cold | 20 | 1393.1 | 1396.9 | 1397.5 | 1398.1 | — | — |
+| SIGN_ED25519 1232B total warm | 20 | 1313.6 | 1314.4 | 1314.8 | 1315.1 | — | — |
+| SIGN_ED25519 4032B total cold | 20 | 1942.4 | 1943.6 | 1944.8 | 1946.4 | — | — |
+| SIGN_ED25519 4032B total warm | 20 | 1859.9 | 1861.5 | 1863.1 | 1864.1 | — | — |
+| WAIT | 20 | 968.4 | 968.6 | 968.8 | 968.8 | 1500 | yes |
+| CREATE P1=0 | 20 | 207.0 | 207.2 | 207.6 | 209.8 | 1500 | yes |
+| ERASE | 40 | 54.0 | 54.2 | 54.3 | 54.4 | 1500 | yes |
+| CREATE P1=1 | 20 | 202.2 | 202.4 | 202.5 | 202.5 | 1500 | yes |
+| OFFER offer=NONE | 1 | 216.7 | 216.7 | 216.7 | 216.7 | 1500 | yes |
+| OFFER offer=VALID | 20 | 162.8 | 163.2 | 163.4 | 163.4 | 1500 | yes |
+| EXPORT P1=0 | 10 | 1059.6 | 1060.3 | 1064.4 | 1064.4 | 1500 | yes |
+| EXPORT P1=1 | 10 | 60.7 | 60.8 | 60.9 | 60.9 | 1500 | yes |
+| IMPORT P1=0 | 10 | 1128.3 | 1128.7 | 1131.3 | 1131.3 | 1500 | yes |
+| IMPORT P1=1 | 10 | 255.0 | 255.2 | 255.6 | 255.6 | 1500 | yes |
+| SELECT | 20 | 31.0 | 31.0 | 31.1 | 62.6 | 1500 | yes |
+| SELECT after reset | 20 | 31.1 | 31.3 | 31.4 | 31.6 | 1500 | yes |
 
 ## Tools (`qntx-card`)
 
@@ -274,9 +279,9 @@ qntx-card personalise --sim 127.0.0.1:35963 --scp 03 --baseline baseline.txt \
 
 Measured on this tree (architecture §14.7 R6; the CI build job reports them again):
 
-- **CAP**: `qntx-card.cap` is 133,656 B; the load-file components inside it
-  (`org/qntx/card/javacard/*.cap`) total 27,814 B.
-- **Transient**: the simulator's memory report ends `total 2776 / 3990 (budget 3390)` — 2,776 B
+- **CAP**: `qntx-card.cap` is 135,784 B; the load-file components inside it
+  (`org/qntx/card/javacard/*.cap`) total 28,273 B.
+- **Transient**: the simulator's memory report ends `total 2780 / 3990 (budget 3390)` — 2,780 B
   of the 3,990 B JCAlgTest pool, inside the §5.1 acceptance budget of 3,390 B.
 - **Persistent**: ≈ 7.1 KB of objects and arrays plus the ≈ 28 KB CAP against the 157,524 B
   NVM of card A's silicon (architecture §5.1). That is the architecture estimate — the
@@ -298,8 +303,10 @@ job calls `ci.yml` as a workflow — REUSE lint, Spotless, build + all tests, th
 differential, reproducible CAP and card-sim, PIT, the SBOM, `dist` and both vector generators
 must pass on the tagged commit. Then the `release` job checks the tag equals the version,
 refuses the tag unless a committed real-card record
-[`realcard/<cap-sha256>.txt`](realcard/) exists for this CAP hash with `failed 0` and
-`InstallRealCardTest` passing, rebuilds `build/dist/` with toolchain auto-download off (the
+[`realcard/<cap-sha256>.txt`](realcard/) passes `./gradlew :tests:checkRealCardRecord`:
+the record's `cap` is the released CAP's sha256, its `tree-tests`/`tree-applet` are the
+tagged trees, `failed 0`, every `suite.txt` class is PASS or SKIP and
+`InstallRealCardTest` is PASS. It rebuilds `build/dist/` with toolchain auto-download off (the
 JDK comes only from setup-java), proves the rebuilt CAP is byte-identical to the released one,
 verifies `SHA256SUMS`, attests build provenance and publishes a GitHub release:
 
