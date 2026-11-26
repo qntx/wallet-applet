@@ -26,10 +26,9 @@ final class ReceiveBoundTest {
     }
 
     /**
-     * {@code receiveBytes} forced to return 0 on every call (site {@code i4} skip, {@code nth = 0})
-     * after {@code setIncomingAndReceive} delivered only a chunk: the loop exits after
-     * {@code MAX_RECEIVE_CALLS = 255} calls with {@code 6F00} (the faulted lc is not
-     * trusted: short APDUs cap at 255). Before the bound the same fault spun forever.
+     * {@code receiveBytes} forced to return 0 on every call (site {@code i3} skip, {@code nth = 0})
+     * after {@code setIncomingAndReceive} delivered only a chunk: a zero-byte call is a stuck
+     * delivery and the loop ends with {@code 6F00}. Before the bound the same fault spun forever.
      */
     @Test
     void receiveZeroReturnIsBounded() throws Exception {
@@ -39,7 +38,7 @@ final class ReceiveBoundTest {
         Vecs.blankFor(card, a);
         card.receiveChunk(8);
         try {
-            Fault.armSite("WalletApplet.receiveAll#i4", 0, Fault.SITE_SKIP);
+            Fault.armSite("WalletApplet.receiveAll#i3", 0, Fault.SITE_SKIP);
             org.qntx.card.host.Open.Request req = org.qntx.card.host.Open.request(Vecs.RND);
             byte[] rapdu = card.transmit(req.apdu());
             assertEquals(
