@@ -1210,38 +1210,39 @@ host-side round trip including transport; median / p95 ms, n):
 | --- | --- | --- | --- |
 | `SELECT` | 31 | 31 | 20 |
 | `GET_IDENTITY` | 29 | 29 | 1 |
-| initialisation step (max) | 164 | 164 | 7 |
-| `PERSONALIZE` | 609 | 609 | 1 |
-| `OPEN` | 316 | 317 | 20 |
+| initialisation step (max) | 148 | 148 | 7 |
+| `PERSONALIZE` | 603 | 603 | 1 |
+| `OPEN` | 317 | 318 | 20 |
 | `STATUS` | 33 | 33 | 20 |
-| `VERIFY` right | 214 | 215 | 20 |
+| `VERIFY` right | 215 | 216 | 20 |
 | `VERIFY` wrong | 80 | 80 | 20 |
 | `WAIT` | 969 | 969 | 20 |
-| `CREATE` `P1 = 0` | 207 | 207 | 20 |
+| `CREATE` `P1 = 0` | 207 | 208 | 20 |
 | `CREATE` `P1 = 1` | 202 | 203 | 20 |
 | `ERASE` | 54 | 54 | 40 |
-| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 413 | 20 |
+| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 412 | 20 |
 | `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
 | `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
 | `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 152 | 20 |
 | `SIGN_ECDSA`, depth 5, cold | 604 | 607 | 20 |
-| `SIGN_ECDSA`, depth 5, warm | 316 | 318 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 316 | 316 | 20 |
 | `SIGN_BIP340` (tweak), cold | 1060 | 1061 | 20 |
 | `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
 | `SIGN_ED25519` begin, cold | 498 | 499 | 60 |
 | `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
-| `SIGN_ED25519` finish, cold | 670 | 673 | 60 |
-| `OFFER` first | 216 | 216 | 1 |
+| `SIGN_ED25519` finish, cold | 670 | 674 | 60 |
+| `OFFER` first | 217 | 217 | 1 |
 | `OFFER` valid | 163 | 163 | 20 |
-| `EXPORT` `P1 = 0x00` | 818 | 821 | 10 |
+| `EXPORT` `P1 = 0x00` | 1060 | 1064 | 10 |
 | `EXPORT` `P1 = 0x01` | 61 | 61 | 10 |
-| `IMPORT` `P1 = 0x00` | 833 | 837 | 10 |
-| `IMPORT` `P1 = 0x01` | 254 | 255 | 10 |
+| `IMPORT` `P1 = 0x00` | 1129 | 1131 | 10 |
+| `IMPORT` `P1 = 0x01` | 255 | 256 | 10 |
 
-The slowest command (`SIGN_BIP340` with a tweak, cold) has a margin of 1.4× to the limit;
-`WAIT` 1.5× (1.1× at the 1100 ms upper bound of §3 item 9). A command record costs about
+The slowest command (`IMPORT` `P1 = 0x00`, which decompresses and verifies the peer key in
+each evaluation, §16.2) has a margin of 1.3× to the limit; `WAIT` 1.5× (1.1× at the 1100 ms
+upper bound of §3 item 9). A command record costs about
 33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
-⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,396 ms cold
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,397 ms cold
 (498 + 5 × 46 + 670). `EXPORT`/`IMPORT` are timed against a member emulated by the host
 — the two-card flow on silicon is not run. `docs/architecture.md` §10 lists the real-card
 timing suite.
