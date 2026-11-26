@@ -530,14 +530,22 @@ final class Transfer {
         }
         short self = -1;
         short found = -1;
+        // the index of found among the members other than self (§16.1 item 1): the number
+        // of non-self members seen before found — computed inside the loop so no boundary
+        // on self's position is needed
+        short slot = -1;
+        short nonSelf = 0;
         for (short i = 0; i != c; i++) {
             short o = (short) (P_MEM + 1 + i * 16);
-            if (Bytes.equal(p, o, p, P_SELF, (short) 16) == Const.CHECK_OK) {
+            short isSelf = Bytes.equal(p, o, p, P_SELF, (short) 16);
+            if (isSelf == Const.CHECK_OK) {
                 self = i;
             }
             if (Bytes.equal(p, o, p, P_CAND, (short) 16) == Const.CHECK_OK) {
                 found = i;
+                slot = (short) (i - nonSelf);
             }
+            nonSelf += isSelf == Const.CHECK_OK ? (short) 1 : (short) 0;
         }
         if (found < 0) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
@@ -545,7 +553,7 @@ final class Transfer {
         if (self < 0 || self == found) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        return slotOf(self, found);
+        return slot;
     }
 
     /**
@@ -564,10 +572,6 @@ final class Transfer {
         return (short) (dataOff + 1);
     }
 
-    /** The index of {@code found} among the members other than {@code self} (§16.1 item 1). */
-    private static short slotOf(short self, short found) {
-        return (short) (found - (found > self ? 1 : 0));
-    }
 
     /**
      * §9.14 check 1: {@code CMAC(K_tm, ct)} into {@link Mem#H}[0..16), compared with the tag in
