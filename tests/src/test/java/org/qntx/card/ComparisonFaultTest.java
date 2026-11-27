@@ -437,8 +437,8 @@ final class ComparisonFaultTest {
     /**
      * Forcing the own-ID compare of {@code memberSlot}'s first loop iteration to fail leaves {@code
      * self = -1}, which the {@code self < 0} half of the line-553 guard must turn into 6F00 before
-     * {@code setPeer}. A mutation dropping it lets the run continue with a wrong slot: it still ends
-     * in a refusal downstream, so the kill is that no {@code Secp256k1.agree} ever runs. The
+     * {@code setPeer}. A mutation dropping it lets the run continue with a wrong slot: it still
+     * ends in a refusal downstream, so the kill is that no {@code Secp256k1.agree} ever runs. The
      * session's two tag compares and the certificate compare precede it, so it is the fourth {@code
      * Bytes.equal} of the command.
      */
