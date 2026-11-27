@@ -582,13 +582,14 @@ final class GateSweepTest {
     }
 
     /**
-     * {@code RELEASED} when the persistent image differs outside {@code State.OFF_FAILS} — the
-     * failure count and its complement (bytes 2–5) commit on every refused verification, which is
-     * the spec's bookkeeping, not the gated effect.
+     * {@code RELEASED} when the persistent image differs outside the bookkeeping words an
+     * unverified command may legitimately commit: {@code OFF_FAILS} (bytes 2–5, committed on every
+     * refused verification) and {@code OFF_OFFER} (bytes 8–9, committed by OFFER, which §9.2 allows
+     * in an unverified session — an INS-corrupting unwrap fault can dispatch either one).
      */
     private static int gatedChange(byte[] before, byte[] after) {
         for (int i = 0; i < before.length; i++) {
-            if (before[i] != after[i] && (i < 2 || i > 5)) {
+            if (before[i] != after[i] && (i < 2 || i > 5) && (i < 8 || i > 9)) {
                 return RELEASED;
             }
         }
