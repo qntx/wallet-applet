@@ -25,9 +25,9 @@ final class ChunkedReceiveTest {
     }
 
     /**
-     * A delivery that never produces bytes: {@code receiveAll}'s zero-return check ends
-     * the command with {@code 6F00} instead of spinning — the PIT-visible twin of {@link
-     * ReceiveBoundTest} (which arms the instruction site under {@code gateSweep}).
+     * A delivery that never produces bytes: {@code receiveAll}'s zero-return check ends the command
+     * with {@code 6F00} instead of spinning — the PIT-visible twin of {@link ReceiveBoundTest}
+     * (which arms the instruction site under {@code gateSweep}).
      */
     @Test
     void stalledReceiveIsBounded() throws Exception {

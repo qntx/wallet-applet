@@ -243,10 +243,10 @@ public final class Agent {
     }
 
     /**
-     * A method is already woven once it calls the guards the weaver emits; probes legitimately
-     * call {@code Memory}/{@code Nvm} themselves, and the instruction-replacing rewrites
-     * ({@code bastore} to {@code Nvm.sastore}) cannot fire twice anyway — only the guards
-     * appended beside an invoke are re-wrappable on retransformation.
+     * A method is already woven once it calls the guards the weaver emits; probes legitimately call
+     * {@code Memory}/{@code Nvm} themselves, and the instruction-replacing rewrites ({@code
+     * bastore} to {@code Nvm.sastore}) cannot fire twice anyway — only the guards appended beside
+     * an invoke are re-wrappable on retransformation.
      */
     private static final Set<String> WOVEN = Set.of("site", "ret", "skip", "data", "forced");
 
@@ -257,9 +257,7 @@ public final class Agent {
                                 code.elementList().stream()
                                         .anyMatch(
                                                 el ->
-                                                        el
-                                                                        instanceof
-                                                                        InvokeInstruction inv
+                                                        el instanceof InvokeInstruction inv
                                                                 && inv.method()
                                                                         .owner()
                                                                         .name()

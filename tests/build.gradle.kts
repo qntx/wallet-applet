@@ -566,7 +566,8 @@ tasks.test {
     }
     filter {
         excludeTestsMatching("org.qntx.card.GateSweepTest")
-        // the predicate self-checks inject deliberate releases; they belong to gateSweep
+        // the predicate self-checks inject deliberate releases; they need the sites
+        // weave (faultGates / gateSweep)
         excludeTestsMatching("org.qntx.card.GateSweepPredicateTest")
     }
     systemProperty("qntx.cap", cap.get().asFile.absolutePath)
@@ -609,10 +610,24 @@ val gateSweep by tasks.registering(Test::class) {
             .asFile.absolutePath,
     )
     jvmArgumentProviders.add {
-        listOf("-javaagent:${agent.singleFile.absolutePath}=org/qntx/card;sites")
+        // the dsa set gates where data/store/arithmetic sites weave (architecture §6);
+        // '|' joins the list because the PIT launcher splits agent args on ','
+        listOf(
+            "-javaagent:${agent.singleFile.absolutePath}=org/qntx/card;sites;" +
+                "dsa=Transfer|Session|Kdf|Bytes|State|Wallet|Identity|" +
+                "Secp256k1.agree|Secp256k1.decompress|Secp256k1.verifyHash|" +
+                "Secp256k1.onCurve|Secp256k1.randomScalar|Secp256k1.mul|" +
+                "Secp256k1.inRange|Secp256k1.compare|Secp256k1.rsToDer|" +
+                "Secp256k1.derToRs|WalletApplet.process|WalletApplet.dispatch|" +
+                "WalletApplet.receiveAll|Derivation.master",
+        )
     }
     systemProperty("qntx.cap", cap.get().asFile.absolutePath)
     systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
+    // optional scenario shard "i/N" — the CI sweep job runs it as a matrix
+    providers.systemProperty("qntx.sweepShard").orNull?.let {
+        systemProperty("qntx.sweepShard", it)
+    }
     systemProperty(
         "qntx.reports",
         layout.buildDirectory
@@ -636,7 +651,62 @@ val gateSweep by tasks.registering(Test::class) {
     }
 }
 
-tasks.check { dependsOn(gateSweep) }
+// the woven fault tests without the sweep itself: the full GateSweepTest runs
+// minutes-per-scenario and has its own CI job; check keeps the cheap armed-fault
+// tests and the predicate self-checks under the same weave
+val faultGates by tasks.registering(Test::class) {
+    description =
+        "Woven fault tests without the sweep: ReviewMutantTest, DerivationFaultTest, " +
+        "ReceiveBoundTest and the GateSweepTest release-predicate self-checks."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform()
+    dependsOn(":applet:cap", ":sim:shadowJar")
+    inputs.file(cap).withPropertyName("cap")
+    inputs.files(agent).withPropertyName("agent")
+    systemProperty(
+        "qntx.simJar",
+        project(":sim")
+            .layout.buildDirectory
+            .file("libs/card-sim.jar")
+            .get()
+            .asFile.absolutePath,
+    )
+    jvmArgumentProviders.add {
+        listOf(
+            "-javaagent:${agent.singleFile.absolutePath}=org/qntx/card;sites;" +
+                "dsa=Transfer|Session|Kdf|Bytes|State|Wallet|Identity|" +
+                "Secp256k1.agree|Secp256k1.decompress|Secp256k1.verifyHash|" +
+                "Secp256k1.onCurve|Secp256k1.randomScalar|Secp256k1.mul|" +
+                "Secp256k1.inRange|Secp256k1.compare|Secp256k1.rsToDer|" +
+                "Secp256k1.derToRs|WalletApplet.process|WalletApplet.dispatch|" +
+                "WalletApplet.receiveAll|Derivation.master",
+        )
+    }
+    systemProperty("qntx.cap", cap.get().asFile.absolutePath)
+    systemProperty("qntx.vectors", rootProject.file("spec/vectors").absolutePath)
+    systemProperty(
+        "qntx.reports",
+        layout.buildDirectory
+            .dir("reports")
+            .get()
+            .asFile.absolutePath,
+    )
+    filter {
+        includeTestsMatching("org.qntx.card.ReviewMutantTest")
+        includeTestsMatching("org.qntx.card.GateSweepPredicateTest")
+        includeTestsMatching("org.qntx.card.DerivationFaultTest")
+        includeTestsMatching("org.qntx.card.ReceiveBoundTest")
+    }
+    testLogging {
+        events("failed", "passed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+}
+
+// the full sweep has its own CI job (see ci.yml `sweep`); check runs the woven fault
+// tests and the predicate self-checks via faultGates
+tasks.check { dependsOn(faultGates) }
 
 val memoryReport by tasks.registering {
     description = "Prints the simulator's transient-memory report of the installed applet."
