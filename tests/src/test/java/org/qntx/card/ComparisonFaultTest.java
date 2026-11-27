@@ -239,8 +239,8 @@ final class ComparisonFaultTest {
 
     /**
      * The draw loop's {@code Bytes.wipe(W_T)} before {@code nextBytes} is a counted call: a
-     * mutation that drops it leaves the seed the draw produced identical, so the only
-     * observable is the call count itself.
+     * mutation that drops it leaves the seed the draw produced identical, so the only observable is
+     * the call count itself.
      */
     @Test
     void createDrawWipeIsCounted() throws Exception {
@@ -263,8 +263,8 @@ final class ComparisonFaultTest {
 
     /**
      * The staged-seed wipe on the compare-fail path: the same fault is armed as in {@link
-     * #createSeedCopiesForcedAreCaught} and the {@code Bytes.wipe} count is asserted — the
-     * teardown wipe lands the same under the mutation, so the count is what separates them.
+     * #createSeedCopiesForcedAreCaught} and the {@code Bytes.wipe} count is asserted — the teardown
+     * wipe lands the same under the mutation, so the count is what separates them.
      */
     @Test
     void createStagedSeedWipeIsCounted() throws Exception {
@@ -276,12 +276,15 @@ final class ComparisonFaultTest {
         Card card = Vecs.factory();
         Vecs.blankFor(card, Vecs.cardA(card));
         Session s2 = Vecs.open(card);
-        // n = 1 is the staged-seed compare (the first Bytes.equal of CREATE P1=01)
+        // n = 4 is the staged-seed compare — the session's two tag compares and the
+        // others != ID(A) loop's check take the first three Bytes.equal calls
         Fault.countCalls();
-        Fault.arm(EQUAL, 1, Const.CHECK_FAIL);
+        Fault.arm(EQUAL, 4, Const.CHECK_FAIL);
         int sw = sw(() -> Vecs.roundtrip(card, s2, INS_CREATE, 1, 0, data).sw());
         assertEquals(0x6F00, sw, "forced staged-seed compare");
-        assertEquals(10, Fault.calls("Bytes.wipe"), "create1 Bytes.wipe calls");
+        // 11 wipes: the compare-fail branch wipes the staged seed — a mutation dropping
+        // that Bytes.wipe call leaves 10
+        assertEquals(11, Fault.calls("Bytes.wipe"), "create1 Bytes.wipe calls");
     }
 
     @Test
@@ -431,6 +434,32 @@ final class ComparisonFaultTest {
         }
     }
 
+    /**
+     * Forcing the own-ID compare of {@code memberSlot}'s first loop iteration to fail leaves {@code
+     * self = -1}, which the {@code self < 0} half of the line-553 guard must turn into 6F00 before
+     * {@code setPeer}. A mutation dropping it lets the run continue with a wrong slot: it still ends
+     * in a refusal downstream, so the kill is that no {@code Secp256k1.agree} ever runs. The
+     * session's two tag compares and the certificate compare precede it, so it is the fourth {@code
+     * Bytes.equal} of the command.
+     */
+    @Test
+    void memberSlotSelfScanIsFault() throws Exception {
+        EmuMember target = new EmuMember();
+        Side source = loaded(target);
+        Fault.countCalls();
+        Fault.arm(EQUAL, 4, Const.CHECK_FAIL);
+        try {
+            assertEquals(
+                    Const.SW_FAULT,
+                    sw(() -> source.inner(INS_EXPORT, 0, target.exportRequest()).sw()),
+                    "self scan");
+            assertEquals(0, Fault.calls("Secp256k1.agree"), "agree before the guard");
+        } finally {
+            Fault.reset();
+            source.reopen(true);
+        }
+    }
+
     /** Forcing {@code memberSlot}'s candidate check at self's index makes {@code self == found}. */
     @Test
     void memberSlotSelfIsFault() throws Exception {
@@ -450,6 +479,7 @@ final class ComparisonFaultTest {
             Fault.reset();
             source.reopen(true);
         }
+
         // CHECK_OK at self's P_CAND call yields self == found → 6F00; memberSlot runs twice
         assertEquals(
                 "{1=36864, 2=36864, 3=27264, 4=36864, 5=36864, 6=28416, 7=36864, 8=36864, 9=36864, 10=36864, 11=36864, 12=28416, 13=36864, 14=36864, 15=36864, 16=36864, 17=36864}",
