@@ -344,7 +344,7 @@ Coded constants (RM(1,4) codewords, pairwise Hamming distance ≥ 8, generated a
 | Independent recomputation of every check that gates seed export, the peer-key slot write or seed import (§16.2 item 4): each such check is evaluated once at its checking-order position (data error → `6A80`, missing condition → `6985`) and again by recomputation immediately before the effect it guards (`6F00`), reusing no result, flag, hash or key-object content of the first evaluation: `EXPORT` `P1 = 0x00` — certificate (`Identity.verifyCert`), membership (`memberSlot`, members re-read and IDs recomputed, the slot index compared) and `sig_T` (`offerSignature`: `A_T` decompressed again and compared in constant time with the peer-key slot read back by `getW`, the offer hash recomputed into a separate buffer, the verification repeated), recomputed after `hashM` and before `signHash`, which writes `sig_S` over the certificate's signature and `LK_T` in the buffer, and before the pending export keys and `E` are produced; `EXPORT` `P1 = 0x01` — the pending-export state checked on the pending word and then on a separate shadow word holding `PENDING_EXPORT_SHADOW`, before the payload is encrypted under `K_te`; `IMPORT` `P1 = 0x00` — certificate and, when not `BLANK`, membership with `life` read again before the peer-slot `setW`, `sig_S` (`verifyHash`: `A_S` decompressed again and compared with the slot read back, `A` and `LK` re-read, `TH` recomputed into a separate buffer, the verification repeated) before the pending import keys are derived from the recomputed `TH`; `IMPORT` `P1 = 0x01` — the MAC recomputed before the in-place decryption, and, when not `BLANK`, the three re-seal equality checks plus `life` equal to a value read again before T-INSTALL; `OFFER` — `life` before T-OFFER; `EXPORT` `P1 = 0x01` — `verified` (the shadow word) before the payload; the `LOADED`-only checks are written `if (life != BLANK)` so a skipped branch enters them. The peer-key slots hold `P_init` until written — a point whose discrete logarithm is unknown, so a slot never silently behaves as a key the attacker controls. Ending a pending state overwrites `K_te`/`K_tm` with fresh random values, never a constant, so a pending check bypassed by a fault encrypts/MACs under keys nobody holds | `Transfer`, `Session.endPending` |
 | Key and seed derivations computed twice and compared (§16.2 item 5): `EXPORT`/`IMPORT` `P1 = 0x00` derive the transfer keys from two ECDH products in separate buffers — the scalar `e` is loaded twice and the range check repeated — with two `Kdf.kdf` calls whose outputs are compared in constant time before any `setKey`, and each loaded key is read back by `getKey` and compared; `OPEN` derives its session keys by two KDFs compared and read back the same way and re-checks `x` in range; `CREATE` `P1 = 0x00` draws `t` into a wiped slot checked non-zero and computes the seed twice into separate buffers, compared and checked non-zero (§9.4) | `Transfer.export0`/`import0`, `Transfer.loadKeys`, `Session.open`, `Secp256k1.inRange`, `Wallet.create` |
 | Staged copies compared with their source (§16.2 item 5): every copy of seed material or of an access hash into a staging buffer that feeds T-CREATE, T-CHANGE, T-INSTALL or an `EXPORT` `P1 = 0x01` payload is followed by a constant-time `Bytes.equal` against the source — a skipped or mis-offset copy can only make the values differ | `Wallet.create` (seed, access hash), `Wallet.install` (seed, access hash), `Wallet.change` (access hash), `Transfer.export1` (seed, `accessHash_T`) |
-| Bounded APDU reception: `receiveAll` iterates at most `Lc` times, so a transport or platform that delivers zero bytes faults `6F00` instead of spinning | `WalletApplet.receiveAll` |
+| Bounded APDU reception: `receiveAll` faults `6F00` on a `receiveBytes` call that returns 0 bytes, so a transport or platform that stalls delivery faults instead of spinning | `WalletApplet.receiveAll` |
 | Self-verification of every signature (§16.2.6): detects faults in the signing computation; for hardened ECDSA leaves and Ed25519 it does not detect a fault that rewrote the private key before signing — the host's check against the cached public key does; `Ecdsa` recomputes the verification twice, `Bip340`/`Ed25519` compute `V` once and evaluate the comparison twice, so a forced result needs a second, matching fault in the signing computation | `Ecdsa` (leaf public key via `PACE_GM(IL, K_par)` for non-hardened leaves), `Bip340` (`Q = P_even + t·G` via `PACE_GM`; check `s·G + (−e·Q) = R`), `Ed25519` (`S·B + (−k·A) = R`) |
 | Share masking of secret products with the §16.2.7 order: `s = ((k + e·d₁) mod n + e·d₂) mod n`, `S = ((r + k·a₁) mod ℓ + k·a₂) mod ℓ`; `d₁`, `a₁` fresh uniform per signature; no intermediate equals `e·d` or `k·a` | `ModArith.mulMasked`, used by `Bip340` and `Ed25519` |
 | Structural binding of the seed to the code (D6) | `Wallet.verify`/`unwrap` decrypt only after `CHECK_OK` |
@@ -384,14 +384,43 @@ and a release needs the faults listed in the last column.
 | `Identity.signHash` self-verification | once | — | — | a computation fault alone is refused | a computation fault plus a skipped check |
 | `verifyHash` coded result | — | — | the engine boolean belongs to one call; every gate's two evaluations are two calls | one skipped conditional yields a non-codeword; a corrupted boolean affects one evaluation | — |
 
-The simulator's single-fault sweep (`GateSweepTest`, §9) re-runs each attack path once per
-executed branch, call and woven result with that one fault injected and requires every run
-refused. It currently covers the command scenarios the driver enumerates — `STATUS`, `VERIFY`
-(right and wrong code), `CREATE` both modes, `CHANGE`, `OFFER`, `EXPORT`/`IMPORT` on `BLANK`
-and `LOADED`, `PUBLIC_KEY`, the three signing commands and `ERASE` — each scenario once per
-executed site of its run; the §16.2 item 5 derivation gates are covered by the armed-fault
-cases of `DerivationFaultTest` (one skip per listed site) and the review3 PoCs
-(`org.qntx.card.review3`), and the receive bound by `ReceiveBoundTest`.
+The simulator's single-fault sweep (`GateSweepTest`, §9) instruments the applet with five
+site kinds — branches, invokes, data loads, stores and arithmetic — and, per scenario, counts
+one unfaulted run (which must be refused), then re-runs the scenario on a fresh card once per
+(site, occurrence, mode) under a watchdog of fifty times the counting run's site hits. Branch
+sites are swept TAKE and FALL; invoke sites SKIP and — for `short`/`byte`/`boolean` results,
+applet and Java Card API calls alike — FORCED to every coded value of `Const`; data loads
+ZERO, ONES and FLIP; stores skipped; arithmetic evaluated to its left operand. Data, store
+and arithmetic faults are woven only inside the gate methods this section lists; branch and
+invoke faults apply to every applet method. Branch and invoke sites are swept at every
+occurrence; a data, store or arithmetic site executed more than eight times is sampled at
+occurrences {1, 2, 3, last} plus four evenly spaced ones (each CSV row carries a `sampled`
+flag).
+
+Two scenario families are swept. The attack scenarios replay an outsider's path — `VERIFY`
+with a wrong code at each count boundary, the unverified forms of `CHANGE`, `ERASE`,
+`PUBLIC_KEY` and the three signing commands, `EXPORT` to a non-member, a foreign-batch or
+attacker-keyed target, `EXPORT` with no pending offer, `IMPORT` of an attacker seed, a
+different wallet and a zero-key record — and require every faulted run refused exactly as the
+unfaulted one is. The legitimate-flow scenarios run a genuine command and judge the released
+effect against the public candidate set (zero, the card's compressed identity and its hash, a
+genuine member's identity and certificate, the public windows of the scratch arrays): `SXe`
+(export, predicate R-X — the payload keys must need the target's link key), `SIe` and `SIn`
+(import and install, R-I — the pending keys must need the source's `e`), `SCr` (`CREATE`
+P1=0, R-C — the seed must come from the card's own random), `SCi` (`CREATE` P1=1, R-S — the
+stored seed is the one sent), `SCh` (`CHANGE`) and the access-binding half of `SCr`/`SCi`/
+`SIn` (R-A — the stored wrap opens only under the access hash the host sent, evaluated
+host-side from `ct`/`tag` and the stored `wrapKey`), and `SO` (`OPEN`, R-O — the session
+keys are neither equal under two RNG draws nor in the candidate set). `SXe` and `SO` also
+release when the produced ephemeral equals `s·G` for any scalar `s` taken from the public
+windows — the blob bytes, public scratch windows, transcript hash, point x-coordinates and
+0x00…01 — because such an ephemeral lets the peer derive the same keys (R-E8). An outcome
+whose keys
+differ from correct but match no candidate is DEVIATED — listed, not a failure; a run
+exceeding the watchdog is a HANG row; the test fails only on RELEASED. Every release
+predicate is pinned by `GateSweepPredicateTest`, which arms a deliberate fault combination
+that must RELEASED (e.g. skipping a staged copy together with forcing its comparison) so a
+vacuously-false predicate cannot pass unnoticed.
 
 ## 7. Build system and toolchain
 
@@ -507,7 +536,7 @@ details), RF behaviour, GlobalPlatform. These are the real-card suite (§10).
 | Reference host | `host` module implements the host side from `protocol.md` only (no applet code imported); all command tests drive the card through it | `host`, `tests` |
 | Fuzz | Jazzer on `Session.unwrap` + inner dispatch (random records with valid keys), on every parser (`path`, certificates, payload) | `tests` |
 | Mutation | PIT on `applet` classes with the command and tearing suites; the gates of each stage (listed in §14) must have no surviving mutant; the report is attached to each PR | `tests` |
-| Fault mutants | Hand-written fault mutants are the primary fault evidence (PIT mutates JVM bytecode, not CAP instruction skips): delete the T-FAIL call; delete `commitTransaction` (assert abort, T-ERASE, `6F00`, card `BLANK`, no comparison); overwrite `f_a` with a smaller value after its complement check; overwrite the value T-FAIL writes; skip the `f ≥ L` test with `f = L`; force one comparison branch to pass; force the fingerprint check; skip the `WAIT` gate (assert the comparison count still stays ≤ L); skip `ERASE`'s `verified` gate; skip each `IMPORT` equality check in `LOADED`. Each asserts no uncounted comparison, no T-OK and no output, per P2/P3 of `threat-model.md`. The mutation gate also comprises the single-fault sweep `GateSweepTest` (instruction-site skip, branch inversion, forced coded results, forced ECDSA verification — every attack path re-run once per executed site, every run refused) and `ReviewMutantTest` (persistent instruction-site faults Q01/Q02 at `Transfer.setPeer`) | `tests` |
+| Fault mutants | Hand-written fault mutants are the primary fault evidence (PIT mutates JVM bytecode, not CAP instruction skips): delete the T-FAIL call; delete `commitTransaction` (assert abort, T-ERASE, `6F00`, card `BLANK`, no comparison); overwrite `f_a` with a smaller value after its complement check; overwrite the value T-FAIL writes; skip the `f ≥ L` test with `f = L`; force one comparison branch to pass; force the fingerprint check; skip the `WAIT` gate (assert the comparison count still stays ≤ L); skip `ERASE`'s `verified` gate; skip each `IMPORT` equality check in `LOADED`. Each asserts no uncounted comparison, no T-OK and no output, per P2/P3 of `threat-model.md`. The mutation gate also comprises the single-fault sweep `GateSweepTest` (branch take/fall, invoke skip and forced coded results including Java Card API calls, data-load zero/ones/flip, store skip, arithmetic keep-left, forced woven calls and ECDSA verification — every scenario re-run once per executed site; §6) and `ReviewMutantTest` (persistent instruction-site faults Q01/Q02 at `Transfer.setPeer`) | `tests` |
 | Real card | §10, gated by `-PrealCard=<reader>`; never run in CI; reports "not run" | `tests/src/realCard` |
 
 ## 10. Real-card suite and silicon admission

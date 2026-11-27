@@ -302,8 +302,10 @@ Measured on this tree (architecture §14.7 R6; the CI build job reports them aga
 
 Tag `v<version>` (the `version` in `gradle.properties`) runs `release.yml`. First the `gate`
 job calls `ci.yml` as a workflow — REUSE lint, Spotless, build + all tests, the noble
-differential, reproducible CAP and card-sim, PIT, the SBOM, `dist` and both vector generators
-must pass on the tagged commit. Then the `release` job checks the tag equals the version,
+differential, reproducible CAP and card-sim, PIT, the SBOM, `dist`, both vector generators
+and the single-fault gate sweep (its own job; `build` runs the woven fault tests and the
+sweep's release-predicate self-checks via `faultGates`) must pass on the tagged commit. Then
+the `release` job checks the tag equals the version,
 refuses the tag unless a committed real-card record
 [`realcard/<cap-sha256>.txt`](realcard/) passes `./gradlew :tests:checkRealCardRecord`:
 the record's `cap` is the released CAP's sha256, its `commit` an ancestor of the tag and
