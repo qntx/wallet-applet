@@ -29,33 +29,50 @@ import javacardx.crypto.Cipher;
  * the verification, MAC computation, membership lookup or state read immediately before the effect
  * it guards; it never re-tests a stored result: the peer key is decompressed again and compared
  * with the slot before the slot is used again, the transcript is recomputed into its own buffer,
- * and the pending-export state is read from a separate shadow word.
+ * and the pending-export state is read from a separate shadow word. The transfer keys themselves
+ * are derived twice — two ECDH products in separate buffers (the export's second {@code mul}
+ * reloading {@code e} with its own load), two KDFs whose outputs are compared in constant time
+ * before {@code setKey} and read back with {@code getKey} after — and the seed and access hash an
+ * {@code EXPORT P1 = 0x01} or an install stages are compared with their sources before the effect
+ * (§16.2 item 4).
  */
 final class Transfer {
     /** {@link Mem#W} offset where a decompressed peer point is staged for {@code setW}. */
     private static final short W_PEER = 0;
 
-    /** {@link Mem#P} layout: {@code getW} read-back, own member ID, members block, candidate ID. */
+    /**
+     * {@link Mem#P} layout: {@code getW} read-back, own member ID, members block, candidate ID, the
+     * first ECDH product and the {@code getKey} read-back (all dead between uses).
+     */
     private static final short P_GETW = 0;
 
     private static final short P_SELF = 0;
     private static final short P_MEM = 16;
     private static final short P_CAND = 81;
 
+    /** {@link Mem#P} offset of the first ECDH product and the {@code getKey} read-back. */
+    private static final short P_PROD = 0;
+
     /** {@link Mem#H} layout shared by the four handlers (all regions dead between them). */
     private static final short H_TH = 0;
 
     private static final short H_A = 32;
     private static final short H_SCALAR = 65;
-    private static final short H_KEYS = 97;
+    private static final short H_K1 = 97;
+    private static final short H_K2 = 129;
 
-    /** A second fp slot for the recomputed re-seal guard of IMPORT P1=01. */
+    /**
+     * A second fp slot for the recomputed re-seal guard of IMPORT P1=01 — the {@link #H_K2} region
+     * under its own name: the two derivations of {@code P1 = 0x00} are dead before {@code P1 =
+     * 0x01} runs.
+     */
     private static final short H_FP = 129;
 
-    /** {@link Mem#N} layout: the generated {@code E} or recomputed {@code LK}, then {@code Z}. */
+    /** {@link Mem#N} layout: the generated {@code E} or recomputed {@code LK}. */
     private static final short N_POINT = 0;
 
-    private static final short N_Z = 65;
+    /** {@link Mem#W} offset of the second ECDH product ({@link #hashM} staging is dead then). */
+    private static final short W_PROD = 0;
 
     private final Mem mem;
     private final State state;
@@ -198,17 +215,28 @@ final class Transfer {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         secp.randomScalar(h, H_SCALAR);
+        // the drawn scalar is checked in range a second time, independently of the
+        // draw loop's own check, immediately before it is used (§16.2 item 4)
+        if (Secp256k1.inRange(h, H_SCALAR) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         try {
             // the single-use e stays in the transient ephKey slot: PLAIN_XY rejects an
             // invalid LK_T itself (§16.5), mapped to the last data check's 6A80
             secp.mul(h, H_SCALAR, Secp256k1.G, (short) 0, n, N_POINT);
-            if (secp.agree(secp.ephKey(), buf, lkOff, n, N_Z) != Const.CHECK_OK) {
+            hashM(h, H_A, buf, dataOff, buf, lkOff, n, N_POINT, H_TH);
+            // the transfer keys are derived twice (§16.2 item 4): two ECDH products in
+            // separate buffers, the second reloading e with its own load — the first
+            // agrees from the scalar still in the ephKey slot
+            if (secp.agree(secp.ephKey(), buf, lkOff, mem.P, P_PROD) != Const.CHECK_OK) {
                 ISOException.throwIt(ISO7816.SW_WRONG_DATA);
             }
+            transferKey(mem.P, P_PROD, H_TH, H_K1);
+            secp.mul(h, H_SCALAR, buf, lkOff, mem.W, W_PROD);
+            transferKey(mem.W, W_PROD, H_TH, H_K2);
         } finally {
             secp.wipeScalar();
         }
-        hashM(h, H_A, buf, dataOff, buf, lkOff, n, N_POINT, H_TH);
         // the checks guarding the pending export keys and the E output, recomputed
         // (§16.2 item 4); the offer hash goes to H_SCALAR — H_TH holds TH — which
         // also overwrites the dead e. recheckPeer decompresses A_T again and compares
@@ -224,7 +252,7 @@ final class Transfer {
             ISOException.throwIt(Const.SW_FAULT);
         }
         identity.signHash(h, H_TH, buf, Const.POINT_LEN);
-        transferKeys(n, h, H_TH);
+        loadKeys();
         Util.arrayCopy(n, N_POINT, buf, (short) 0, Const.POINT_LEN);
         session.setPendingExport();
         return (short) (Const.POINT_LEN + 64);
@@ -250,6 +278,14 @@ final class Transfer {
             ISOException.throwIt(Const.SW_FAULT);
         }
         short ctLen = Bytes.pad(h, (short) 0, (short) (98 + c * 16));
+        // the staged seed and access hash are compared with their sources (§16.2 item 4):
+        // a skipped copy leaves zeros, not the value the output claims to carry
+        if (Bytes.equal(h, (short) 1, mem.seed, (short) 0, (short) 64) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        if (Bytes.equal(h, (short) 65, buf, dataOff, Const.HASH_LEN) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         // the guarded check, evaluated twice, immediately before the output (architecture §6);
         // the second evaluation reads the shadow word (§16.2 item 1)
         if (session.verified() != Const.VERIFIED_YES) {
@@ -320,9 +356,6 @@ final class Transfer {
         if (secp.onCurve(buf, eOff) != Const.CHECK_OK) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
-        if (secp.agree(linkPrivate, buf, eOff, n, N_Z) != Const.CHECK_OK) {
-            ISOException.throwIt(ISO7816.SW_WRONG_DATA);
-        }
         // sig_S guards the pending import keys, recomputed in full on live data: A_S
         // decompressed again and compared with the slot, A and LK read again, TH
         // recomputed into its own slot and verified again; the pending keys come from
@@ -334,7 +367,18 @@ final class Transfer {
         if (secp.verifyHash(peer[slot], h, H_SCALAR, buf, sigOff) != Const.CHECK_OK) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        transferKeys(n, h, H_SCALAR);
+        // the transfer keys are derived twice (§16.2 item 4): two ECDH products in
+        // separate buffers — each KDF feeds the TH its own evaluation computed, never
+        // the other's (K1 the recomputed TH′ at H_SCALAR, K2 the first at H_TH)
+        if (secp.agree(linkPrivate, buf, eOff, mem.P, P_PROD) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        transferKey(mem.P, P_PROD, H_SCALAR, H_K1);
+        if (secp.agree(linkPrivate, buf, eOff, mem.W, W_PROD) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        transferKey(mem.W, W_PROD, H_TH, H_K2);
+        loadKeys();
         identity.cardId(buf, dataOff, mem.sender, (short) 0);
         session.setPending(Const.PENDING_IMPORT);
         return 0;
@@ -486,14 +530,22 @@ final class Transfer {
         }
         short self = -1;
         short found = -1;
+        // the index of found among the members other than self (§16.1 item 1): i minus the
+        // selves seen before it — computed inside the loop so no boundary on self's
+        // position is needed
+        short slot = -1;
+        short selvesBefore = 0;
         for (short i = 0; i != c; i++) {
             short o = (short) (P_MEM + 1 + i * 16);
-            if (Bytes.equal(p, o, p, P_SELF, (short) 16) == Const.CHECK_OK) {
+            short isSelf = Bytes.equal(p, o, p, P_SELF, (short) 16);
+            if (isSelf == Const.CHECK_OK) {
                 self = i;
             }
             if (Bytes.equal(p, o, p, P_CAND, (short) 16) == Const.CHECK_OK) {
                 found = i;
+                slot = (short) (i - selvesBefore);
             }
+            selvesBefore += isSelf == Const.CHECK_OK ? (short) 1 : (short) 0;
         }
         if (found < 0) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
@@ -501,7 +553,7 @@ final class Transfer {
         if (self < 0 || self == found) {
             ISOException.throwIt(Const.SW_FAULT);
         }
-        return slotOf(self, found);
+        return slot;
     }
 
     /**
@@ -518,11 +570,6 @@ final class Transfer {
     /** The payload's seed offset — {@code origin(1) ‖ seed(64)} (§9.14 check 4). */
     private static short seedOff(short dataOff) {
         return (short) (dataOff + 1);
-    }
-
-    /** The index of {@code found} among the members other than {@code self} (§16.1 item 1). */
-    private static short slotOf(short self, short found) {
-        return (short) (found - (found > self ? 1 : 0));
     }
 
     /**
@@ -611,26 +658,46 @@ final class Transfer {
     }
 
     /**
-     * {@code K_te ‖ K_tm = KDF(Z, "qntx-card/v1/kdf-transfer", TH, 32)} (§9.13–9.14): the shared
-     * secret at {@code n[N_Z]} and the transcript hash at {@code h[thOff]} become the pending keys;
-     * the key bytes are staged at {@code h[H_KEYS]}. The caller picks {@code thOff} so a second
-     * evaluation feeds {@link Kdf} its own recomputed TH, never the first evaluation's (§16.2 item
-     * 4).
+     * {@code KDF(Z, "qntx-card/v1/kdf-transfer", TH, 32)} (§9.13–9.14) of one derivation: the
+     * 65-byte product point at {@code prod[pOff]} ({@code Z = prod[pOff + 1 .. pOff + 33)}) and the
+     * transcript hash at {@code h[thOff]} derive 32 key bytes into {@code h[outOff]}. The caller
+     * picks {@code thOff} so each derivation feeds {@link Kdf} the TH its own evaluation computed
+     * (§16.2 item 4).
      */
-    private void transferKeys(byte[] n, byte[] h, short thOff) {
+    private void transferKey(byte[] prod, short pOff, short thOff, short outOff) {
         Kdf.kdf(
                 mem,
-                n,
-                N_Z,
+                prod,
+                (short) (pOff + 1),
                 Const.HASH_LEN,
                 Const.LABEL_KDF_TRANSFER,
-                h,
+                mem.H,
                 thOff,
                 Const.HASH_LEN,
-                h,
-                H_KEYS,
+                mem.H,
+                outOff,
                 Const.HASH_LEN);
-        mem.kTe.setKey(h, H_KEYS);
-        mem.kTm.setKey(h, (short) (H_KEYS + Const.AES_KEY_LEN));
+    }
+
+    /**
+     * The pending transfer keys of §9.13–9.14, from the two independent derivations of §16.2 item
+     * 4: {@code K1} and {@code K2} are compared in constant time before {@code setKey} — a single
+     * fault in either product or KDF makes them differ — and each key object is read back with
+     * {@code getKey} and compared with {@code K2}, so a skipped or faulted {@code setKey} leaves no
+     * pending keys at all.
+     */
+    private void loadKeys() {
+        byte[] h = mem.H;
+        byte[] p = mem.P;
+        if (Bytes.equal(h, H_K1, h, H_K2, Const.HASH_LEN) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        mem.kTe.setKey(h, H_K1);
+        mem.kTm.setKey(h, (short) (H_K1 + Const.AES_KEY_LEN));
+        mem.kTe.getKey(p, P_PROD);
+        mem.kTm.getKey(p, (short) (P_PROD + Const.AES_KEY_LEN));
+        if (Bytes.equal(p, P_PROD, h, H_K2, Const.HASH_LEN) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
     }
 }

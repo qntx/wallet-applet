@@ -14,16 +14,23 @@ import java.lang.classfile.Label;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.MethodTransform;
 import java.lang.classfile.Opcode;
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.instruction.ArrayLoadInstruction;
 import java.lang.classfile.instruction.ArrayStoreInstruction;
 import java.lang.classfile.instruction.BranchInstruction;
+import java.lang.classfile.instruction.ConstantInstruction;
 import java.lang.classfile.instruction.ExceptionCatch;
 import java.lang.classfile.instruction.FieldInstruction;
+import java.lang.classfile.instruction.IncrementInstruction;
 import java.lang.classfile.instruction.InvokeInstruction;
+import java.lang.classfile.instruction.LoadInstruction;
 import java.lang.classfile.instruction.LocalVariable;
 import java.lang.classfile.instruction.LocalVariableType;
 import java.lang.classfile.instruction.NewMultiArrayInstruction;
 import java.lang.classfile.instruction.NewPrimitiveArrayInstruction;
 import java.lang.classfile.instruction.NewReferenceArrayInstruction;
+import java.lang.classfile.instruction.OperatorInstruction;
+import java.lang.classfile.instruction.StoreInstruction;
 import java.lang.classfile.instruction.SwitchCase;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
@@ -59,10 +66,20 @@ import java.util.Set;
  * conditional branch and every invoke instruction of an instrumented method — {@code <init>} and
  * {@code <clinit>} excluded — is additionally guarded by {@link Fault#site}: the woven lookup
  * switch runs the instruction normally, skips it (operands and receiver popped, the zero value of
- * the return type pushed), or runs the negated branch. Site keys are {@code "Class.method#b<k>"}
- * for the k-th branch and {@code "Class.method#i<k>}" for the k-th invoke of the original method
- * body in bytecode order; an overloaded method name gets a {@code #d<hash>} descriptor suffix so
- * keys stay unique. The guard's fast path while nothing is armed or counted is one volatile read.
+ * the return type pushed), forces the branch taken or falls through, runs the negated branch, or —
+ * for an invoke returning {@code short}/{@code byte}/{@code boolean} — pushes an armed value. Site
+ * keys are {@code "Class.method#b<k>"} for the k-th branch and {@code "Class.method#i<k>}" for the
+ * k-th invoke of the original method body in bytecode order; an overloaded method name gets a
+ * {@code #d<hash>} descriptor suffix so keys stay unique. The guard's fast path while nothing is
+ * armed or counted is one volatile read.
+ *
+ * <p>An {@code dsa=<Class|Class.method>}-list token (entries joined by {@code |}) additionally
+ * weaves the data/store/arithmetic sites of architecture §6 into just those methods: every
+ * int-category load (local, array element, int constant, field) passes through {@link Fault#data} —
+ * {@code "…#d<k>"} sites, faulted to ZERO/ONES/FLIP — and every local store, {@code iinc}, {@code
+ * bastore}/{@code sastore}/{@code castore} and int arithmetic instruction is guarded — {@code
+ * "…#s<k>"} and {@code "…#a<k>"} sites that skip the store or keep the left operand. {@link
+ * #siteKinds()} reports each woven site's kind and, for invokes, its return type.
  */
 public final class Agent {
 
@@ -73,6 +90,9 @@ public final class Agent {
     private static volatile boolean installed;
     private static volatile boolean sites;
 
+    /** The kind and invoke return type of every woven site: key → {@code b|d|s|a|i<ret>}. */
+    private static final Map<String, String> siteKinds = new HashMap<>();
+
     private Agent() {}
 
     public static void premain(String args, Instrumentation inst) {
@@ -80,9 +100,19 @@ public final class Agent {
         if (args == null || args.isEmpty()) {
             args = "org/qntx/card";
         }
-        Set<String> packages = new HashSet<>(Arrays.asList(args.split(";")));
+        Set<String> dsa = new HashSet<>();
+        Set<String> packages = new HashSet<>();
+        for (String token : args.split(";")) {
+            if (token.startsWith("dsa=")) {
+                // the D/S/A gate set of architecture §6: `Class` or `Class.method`
+                // entries joined by `|` (a comma would split under the PIT launcher)
+                dsa.addAll(Arrays.asList(token.substring(4).split("\\|")));
+            } else {
+                packages.add(token);
+            }
+        }
         sites = packages.remove("sites");
-        inst.addTransformer(new AppletTransformer(packages, sites));
+        inst.addTransformer(new AppletTransformer(packages, sites, dsa));
         installed = true;
     }
 
@@ -107,14 +137,25 @@ public final class Agent {
         return sites;
     }
 
+    /**
+     * The kinds of all woven instruction sites: {@code "b"} branch, {@code "i"} invoke (followed by
+     * the return descriptor char, e.g. {@code "iS"}), {@code "d"} data load, {@code "s"} store,
+     * {@code "a"} arithmetic — keyed like {@link Fault#armSite}.
+     */
+    public static Map<String, String> siteKinds() {
+        return siteKinds;
+    }
+
     static final class AppletTransformer implements ClassFileTransformer {
 
         private final Set<String> packages;
         private final boolean sites;
+        private final Set<String> dsa;
 
-        AppletTransformer(Set<String> packages, boolean sites) {
+        AppletTransformer(Set<String> packages, boolean sites, Set<String> dsa) {
             this.packages = packages;
             this.sites = sites;
+            this.dsa = dsa;
         }
 
         @Override
@@ -161,6 +202,15 @@ public final class Agent {
                                 builder.with(element);
                                 return;
                             }
+                            // retransformation (PIT's coverage weaver re-runs every
+                            // transformer on the already woven bytes) would wrap each
+                            // guarded call a second time and shift every site index;
+                            // a method is already woven exactly when it calls the sim
+                            // package, which applet code never does on its own
+                            if (woven(m)) {
+                                builder.with(element);
+                                return;
+                            }
                             String name = m.methodName().stringValue();
                             String prefix =
                                     simple
@@ -173,12 +223,17 @@ public final class Agent {
                                                                             .stringValue()
                                                                             .hashCode())
                                                     : "");
+                            boolean gate =
+                                    !dsa.isEmpty()
+                                            && (dsa.contains(simple)
+                                                    || dsa.contains(simple + "." + name));
                             builder.transformMethod(
                                     m,
                                     MethodTransform.transformingCode(
                                             new HookTransform(
                                                     packages,
                                                     sites && !"<init>".equals(name),
+                                                    gate,
                                                     prefix)));
                         });
             } catch (RuntimeException e) {
@@ -187,22 +242,57 @@ public final class Agent {
         }
     }
 
+    /**
+     * A method is already woven once it calls the guards the weaver emits; probes legitimately call
+     * {@code Memory}/{@code Nvm} themselves, and the instruction-replacing rewrites ({@code
+     * bastore} to {@code Nvm.sastore}) cannot fire twice anyway — only the guards appended beside
+     * an invoke are re-wrappable on retransformation.
+     */
+    private static final Set<String> WOVEN = Set.of("site", "ret", "skip", "data", "forced");
+
+    private static boolean woven(MethodModel m) {
+        return m.code()
+                .map(
+                        code ->
+                                code.elementList().stream()
+                                        .anyMatch(
+                                                el ->
+                                                        el instanceof InvokeInstruction inv
+                                                                && inv.method()
+                                                                        .owner()
+                                                                        .name()
+                                                                        .stringValue()
+                                                                        .equals(
+                                                                                "org/qntx/card/sim/Fault")
+                                                                && WOVEN.contains(
+                                                                        inv.method()
+                                                                                .name()
+                                                                                .stringValue())))
+                .orElse(false);
+    }
+
     private static final class HookTransform implements CodeTransform {
 
         private final Set<String> packages;
         private final boolean weaveSites;
+        private final boolean weaveDsa;
         private final String keyPrefix;
         private int branchIndex;
         private int invokeIndex;
+        private int dataIndex;
+        private int storeIndex;
+        private int arithIndex;
         private List<AbstractMap.SimpleEntry<Label, Label>> stubs;
 
         HookTransform(Set<String> packages) {
-            this(packages, false, "");
+            this(packages, false, false, "");
         }
 
-        HookTransform(Set<String> packages, boolean weaveSites, String keyPrefix) {
+        HookTransform(
+                Set<String> packages, boolean weaveSites, boolean weaveDsa, String keyPrefix) {
             this.packages = packages;
             this.weaveSites = weaveSites;
+            this.weaveDsa = weaveDsa;
             this.keyPrefix = keyPrefix;
         }
 
@@ -215,6 +305,12 @@ public final class Agent {
         public void accept(CodeBuilder builder, CodeElement element) {
             switch (element) {
                 case ArrayStoreInstruction store -> rewriteArrayStore(builder, store);
+                case ArrayLoadInstruction load -> weaveData(builder, load);
+                case ConstantInstruction c -> weaveData(builder, c);
+                case StoreInstruction store -> weaveStore(builder, store);
+                case IncrementInstruction inc -> weaveStore(builder, inc);
+                case OperatorInstruction op -> weaveArith(builder, op);
+                case LoadInstruction load -> weaveData(builder, load);
                 case FieldInstruction field -> rewriteFieldStore(builder, field);
                 case BranchInstruction branch -> weaveBranch(builder, branch);
                 case InvokeInstruction invoke -> weaveInvoke(builder, invoke);
@@ -246,7 +342,25 @@ public final class Agent {
             stubs = null;
         }
 
+        /**
+         * A byte/short/char array element store — routed through {@link Nvm} for persistent arrays
+         * — is wrapped in a {@code #s} store site (architecture §6) so the logical store can be
+         * skipped: the guard pops arrayref, index and value and the {@link Nvm} call never runs.
+         */
         private void rewriteArrayStore(CodeBuilder builder, ArrayStoreInstruction store) {
+            boolean site = weaveDsa && STORES.contains(store.opcode());
+            Label normal = site ? builder.newLabel() : null;
+            Label skip = site ? builder.newLabel() : null;
+            Label end = site ? builder.newLabel() : null;
+            if (site) {
+                String key = keyPrefix + "#s" + (++storeIndex);
+                siteKinds.put(key, "s");
+                builder.ldc(key);
+                builder.invokestatic(
+                        FAULT, "site", MethodTypeDesc.ofDescriptor("(Ljava/lang/String;)I"));
+                builder.lookupswitch(normal, List.of(SwitchCase.of(1, skip)));
+                builder.labelBinding(normal);
+            }
             if (store.opcode() == Opcode.BASTORE) {
                 builder.invokestatic(
                         NVM, "bastore", MethodTypeDesc.ofDescriptor("(Ljava/lang/Object;II)V"));
@@ -254,6 +368,14 @@ public final class Agent {
                 builder.invokestatic(NVM, "sastore", MethodTypeDesc.ofDescriptor("([SII)V"));
             } else {
                 builder.with(store);
+            }
+            if (site) {
+                builder.goto_(end);
+                builder.labelBinding(skip);
+                builder.pop();
+                builder.pop();
+                builder.pop();
+                builder.labelBinding(end);
             }
         }
 
@@ -269,6 +391,20 @@ public final class Agent {
                 builder.invokestatic(NVM, "field", MethodTypeDesc.ofDescriptor("()V"));
             }
             builder.with(field);
+            // a getfield/getstatic of an int-category field is a data site like any other load
+            if (!weaveDsa
+                    || (field.opcode() != Opcode.GETFIELD && field.opcode() != Opcode.GETSTATIC)) {
+                return;
+            }
+            char t = field.field().type().stringValue().charAt(0);
+            if (t != 'B' && t != 'S' && t != 'C' && t != 'Z' && t != 'I') {
+                return;
+            }
+            String key = keyPrefix + "#d" + (++dataIndex);
+            siteKinds.put(key, "d");
+            builder.ldc(key);
+            builder.invokestatic(
+                    FAULT, "data", MethodTypeDesc.ofDescriptor("(ILjava/lang/String;)I"));
         }
 
         private void redirectHandler(CodeBuilder builder, ExceptionCatch handler) {
@@ -292,26 +428,44 @@ public final class Agent {
             Label skip = builder.newLabel();
             Label invert = builder.newLabel();
             Label end = builder.newLabel();
-            builder.ldc(keyPrefix + "#b" + (++branchIndex));
+            String key = keyPrefix + "#b" + (++branchIndex);
+            siteKinds.put(key, "b");
+            Label take = builder.newLabel();
+            builder.ldc(key);
             builder.invokestatic(
                     FAULT, "site", MethodTypeDesc.ofDescriptor("(Ljava/lang/String;)I"));
-            builder.lookupswitch(normal, List.of(SwitchCase.of(1, skip), SwitchCase.of(2, invert)));
+            // FALL (4) shares the skip path: the operands are popped and the body falls through
+            builder.lookupswitch(
+                    normal,
+                    List.of(
+                            SwitchCase.of(1, skip),
+                            SwitchCase.of(2, invert),
+                            SwitchCase.of(3, take),
+                            SwitchCase.of(4, skip)));
             builder.labelBinding(normal);
             builder.branch(branch.opcode(), branch.target());
             builder.goto_(end);
+            builder.labelBinding(take);
+            for (int i = 0; i < operandsOf(branch.opcode()); i++) {
+                builder.pop();
+            }
+            builder.branch(Opcode.GOTO, branch.target());
+            builder.goto_(end);
             builder.labelBinding(skip);
-            int operands =
-                    switch (branch.opcode()) {
-                        case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE, IFNULL, IFNONNULL -> 1;
-                        default -> 2;
-                    };
-            for (int i = 0; i < operands; i++) {
+            for (int i = 0; i < operandsOf(branch.opcode()); i++) {
                 builder.pop();
             }
             builder.goto_(end);
             builder.labelBinding(invert);
             builder.branch(negate(branch.opcode()), branch.target());
             builder.labelBinding(end);
+        }
+
+        private static int operandsOf(Opcode opcode) {
+            return switch (opcode) {
+                case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE, IFNULL, IFNONNULL -> 1;
+                default -> 2;
+            };
         }
 
         /**
@@ -325,19 +479,154 @@ public final class Agent {
                 rewriteInvoke(builder, invoke);
                 return;
             }
+            String key = keyPrefix + "#i" + (++invokeIndex);
+            String desc = invoke.method().type().stringValue();
+            char ret = desc.charAt(desc.indexOf(')') + 1);
+            siteKinds.put(key, "i" + ret);
+            boolean forcible = ret == 'S' || ret == 'B' || ret == 'Z';
             Label normal = builder.newLabel();
             Label skip = builder.newLabel();
+            Label forced = builder.newLabel();
             Label end = builder.newLabel();
-            builder.ldc(keyPrefix + "#i" + (++invokeIndex));
+            builder.ldc(key);
             builder.invokestatic(
                     FAULT, "site", MethodTypeDesc.ofDescriptor("(Ljava/lang/String;)I"));
-            builder.lookupswitch(normal, List.of(SwitchCase.of(1, skip)));
+            builder.lookupswitch(
+                    normal,
+                    forcible
+                            ? List.of(SwitchCase.of(1, skip), SwitchCase.of(5, forced))
+                            : List.of(SwitchCase.of(1, skip)));
             builder.labelBinding(normal);
             rewriteInvoke(builder, invoke);
             builder.goto_(end);
             builder.labelBinding(skip);
             emitPops(builder, invoke);
-            pushZero(builder, invoke.method().type().stringValue());
+            pushZero(builder, desc);
+            builder.goto_(end);
+            if (forcible) {
+                builder.labelBinding(forced);
+                emitPops(builder, invoke);
+                builder.ldc(key);
+                builder.invokestatic(
+                        FAULT, "forced", MethodTypeDesc.ofDescriptor("(Ljava/lang/String;)S"));
+            }
+            builder.labelBinding(end);
+        }
+
+        private static final Set<Opcode> STORES =
+                Set.of(Opcode.BASTORE, Opcode.SASTORE, Opcode.CASTORE);
+
+        /** Binary int arithmetic: the faulted result is the left operand. */
+        private static final Set<Opcode> BINARY_ARITH =
+                Set.of(
+                        Opcode.IADD,
+                        Opcode.ISUB,
+                        Opcode.IMUL,
+                        Opcode.IAND,
+                        Opcode.IOR,
+                        Opcode.IXOR,
+                        Opcode.ISHL,
+                        Opcode.ISHR,
+                        Opcode.IUSHR);
+
+        /**
+         * The {@link Fault#data} guard of a primitive load (agent argument {@code dsa=}): the
+         * loaded int-category value passes through {@code Fault.data}, which replaces it on the
+         * armed occurrence — {@code #d<k>} sites, counted like branch and invoke sites.
+         */
+        private void weaveData(CodeBuilder builder, CodeElement element) {
+            builder.with(element);
+            if (!weaveDsa) {
+                return;
+            }
+            boolean intValue =
+                    switch (element) {
+                        case LoadInstruction l -> l.typeKind().asLoadable() == TypeKind.INT;
+                        case ArrayLoadInstruction a ->
+                                switch (a.opcode()) {
+                                    case BALOAD, SALOAD, CALOAD, IALOAD -> true;
+                                    default -> false;
+                                };
+                        case ConstantInstruction c -> c.constantValue() instanceof Integer;
+                        default -> false;
+                    };
+            if (!intValue) {
+                return;
+            }
+            String key = keyPrefix + "#d" + (++dataIndex);
+            siteKinds.put(key, "d");
+            builder.ldc(key);
+            builder.invokestatic(
+                    FAULT, "data", MethodTypeDesc.ofDescriptor("(ILjava/lang/String;)I"));
+        }
+
+        /**
+         * A local store or {@code iinc} gets a {@code #s} store site: the guard pops the stored
+         * value (or nothing for {@code iinc}) and the write never lands.
+         */
+        private void weaveStore(CodeBuilder builder, CodeElement element) {
+            boolean store =
+                    switch (element) {
+                        case StoreInstruction s -> s.typeKind().asLoadable() == TypeKind.INT;
+                        case IncrementInstruction i -> true;
+                        default -> false;
+                    };
+            if (!weaveDsa || !store) {
+                builder.with(element);
+                return;
+            }
+            String key = keyPrefix + "#s" + (++storeIndex);
+            siteKinds.put(key, "s");
+            Label normal = builder.newLabel();
+            Label skip = builder.newLabel();
+            Label end = builder.newLabel();
+            builder.ldc(key);
+            builder.invokestatic(
+                    FAULT, "site", MethodTypeDesc.ofDescriptor("(Ljava/lang/String;)I"));
+            builder.lookupswitch(normal, List.of(SwitchCase.of(1, skip)));
+            builder.labelBinding(normal);
+            builder.with(element);
+            builder.goto_(end);
+            builder.labelBinding(skip);
+            if (element instanceof StoreInstruction s) {
+                // a slot skipped on its first write would merge as unusable (top): write
+                // 0 instead — the verifier needs a type and a never-executed init leaves
+                // the slot's old bytes, modelled as 0
+                builder.pop();
+                builder.iconst_0();
+                builder.istore(s.slot());
+            }
+            builder.labelBinding(end);
+        }
+
+        /**
+         * An int arithmetic instruction gets an {@code #a} site: on the armed occurrence the result
+         * is the left operand (the instruction's own operand for {@code ineg}) — the right operand
+         * is popped and the operator never runs.
+         */
+        private void weaveArith(CodeBuilder builder, OperatorInstruction op) {
+            boolean binary = BINARY_ARITH.contains(op.opcode());
+            boolean unary = op.opcode() == Opcode.INEG;
+            if (!weaveDsa || (!binary && !unary)) {
+                builder.with(op);
+                return;
+            }
+            String key = keyPrefix + "#a" + (++arithIndex);
+            siteKinds.put(key, "a");
+            Label normal = builder.newLabel();
+            Label left = builder.newLabel();
+            Label end = builder.newLabel();
+            builder.ldc(key);
+            builder.invokestatic(
+                    FAULT, "site", MethodTypeDesc.ofDescriptor("(Ljava/lang/String;)I"));
+            builder.lookupswitch(normal, List.of(SwitchCase.of(1, left)));
+            builder.labelBinding(normal);
+            builder.with(op);
+            builder.goto_(end);
+            builder.labelBinding(left);
+            if (binary) {
+                builder.pop();
+            }
             builder.labelBinding(end);
         }
 

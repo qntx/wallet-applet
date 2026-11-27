@@ -112,6 +112,7 @@ NXP JCOP 4 P71, J3R180 class):
 | `javacard.framework` | `Applet`, `APDU`, `ISO7816`, `ISOException`, `Util`; `JCSystem.makeTransientByteArray(…, CLEAR_ON_DESELECT)`, `beginTransaction`, `commitTransaction`, `abortTransaction`, `getTransactionDepth` | Framework, transactions, transient memory |
 | `javacard.security.KeyBuilder` | `TYPE_EC_FP_PRIVATE`, `TYPE_EC_FP_PUBLIC`, `TYPE_EC_FP_PRIVATE_TRANSIENT_DESELECT` (all `LENGTH_EC_FP_256`); `TYPE_AES` and `TYPE_AES_TRANSIENT_DESELECT` (`LENGTH_AES_128`); `TYPE_RSA_PRIVATE` (`LENGTH_RSA_512`) | Key objects |
 | `javacard.security.KeyPair` | `ALG_EC_FP`, `genKeyPair` | Identity key, link key |
+| `javacard.security` key interfaces | `AESKey.setKey`, `AESKey.getKey`; `ECPrivateKey.setS`; `ECPublicKey.setW`, `ECPublicKey.getW`; the `ECKey` domain setters `setFieldFP`, `setA`, `setB`, `setG`, `setR`, `setK` | Key material and domains |
 | `javacard.security.Signature` | `ALG_ECDSA_SHA_256`: `sign`, `verify`, `signPreComputedHash`, `verifyPreComputedHash`; `ALG_AES_CMAC_128`: `sign`, `verify` | Identity signatures, ECDSA, CMAC |
 | `javacard.security.KeyAgreement` | `ALG_EC_SVDP_DH_PLAIN_XY`, `ALG_EC_PACE_GM` | Scalar multiplication, point addition |
 | `javacard.security.MessageDigest` | `ALG_SHA_256`, `ALG_SHA_512` | Hashing, HMAC-SHA512 |
@@ -547,6 +548,8 @@ for some `m` (else `6700`); the IDs in `others` are pairwise distinct and none e
 Seed:
 
 - `P1 = 0x00`: `seed = SHA-512("qntx-card/v1/seed" ‖ t ‖ hostEntropy)`, `t` 32 random bytes.
+  `t` is drawn into a cleared buffer and checked to be non-zero; the seed is computed twice
+  into separate buffers, compared, and checked non-zero before any use (§16.2).
   If the BIP-32 master key of `seed` is invalid (§10.2) the card draws a new `t`. `origin = 0x01`.
 - `P1 = 0x01`: `seed` as given (a BIP-39 seed computed by the host). An invalid BIP-32 master key
   returns `6A80`. `origin = 0x02`.
@@ -745,7 +748,7 @@ Data: empty (`Lc = 0`, else `6700`). Allowed in `LOADED`; no access code is requ
 `waited ← min(waited + 1, W)`. No persistent write. Response: empty. `waited` is session state
 (cleared by teardown, §8.5) and is consumed by `VERIFY` (§9.5 step 4). A host that sees
 `tries ≤ L − F` in `STATUS` sends `W` `WAIT` commands before `VERIFY`; on the baseline chip one
-`WAIT` takes about 1 s (969 ms on the development card, §16.6; §3 item 9 bounds it to
+`WAIT` takes about 1 s (970 ms on the development card, §16.6; §3 item 9 bounds it to
 900–1100 ms), so such an attempt needs about 15 s of continuous contact.
 
 ## 10. Key storage and derivation
@@ -931,7 +934,7 @@ H   = empty SHA-512 context
 `Zr` ahead of the secret `prefix`.
 
 `update(chunk)`: `H.update(chunk)`. `finish(chunk)`: `H.update(chunk)`;
-`k = int_le(H.final()) mod ℓ`; `S = (r + k·a) mod ℓ` computed per §16.2 item 6; check
+`k = int_le(H.final()) mod ℓ`; `S = (r + k·a) mod ℓ` computed per §16.2 item 7; check
 `S·G_W = R + k·A`; output `le32(S)`; wipe `sk`, `h`, `a`, `prefix`, `r`, `k`, `S` and the stream.
 
 With the stream `encode(R) ‖ encode(A) ‖ M` the signature `encode(R) ‖ le32(S)` verifies under
@@ -1141,15 +1144,29 @@ belongs to a past transfer or ciphertext (§3 item 7).
    in `LOADED` the re-seal equality checks, with `life` read again, before T-INSTALL. The inputs
    the two evaluations of a gate still share are listed with the reason in
    `docs/architecture.md` §6: they are persistent keys no command after T-PERSO writes (`caKey`),
-   keys derived once from an already twice-verified transcript (`K_te`/`K_tm` for the MAC), or
-   values a fault can only make fail; a single fault on any of them does not release the guarded
-   effect.
+   values computed twice and compared before use under item 5 (`K_te`/`K_tm` and the session
+   keys), or values a fault can only make fail; a single fault on any of them does not release
+   the guarded effect.
    A signature verification's coded result is derived from the engine's boolean through two
    independent conditionals, so one skipped branch cannot yield the success value; the boolean
    belongs to one verification call, and the two evaluations of a gate are two calls. Ending a
    pending state (§9.2, §8.5) overwrites `K_te` and `K_tm` with fresh random values, never a
    constant, so an output produced past a bypassed pending check is under keys no one holds.
-5. Every signature is self-verified before output (§12): ECDSA with `verifyPreComputedHash`
+5. The transfer keys of `EXPORT`/`IMPORT` `P1 = 0x00` are derived twice: two scalar
+   multiplications (in `EXPORT` the scalar is loaded twice), two KDFs, products and outputs in
+   separate buffers with no shared temporary; the two outputs are compared in constant time
+   with a coded result before the keys are loaded, and each loaded key is read back with
+   `getKey` and compared with the second output. In `IMPORT` the two KDFs use the two
+   independently computed `TH`. The export scalar `e` and the session scalar `x` of `OPEN` are
+   checked in range a second time before use. The session keys of `OPEN` are computed by two
+   KDFs into separate buffers, compared, loaded, and each key read back and compared (`Z` is
+   shared: a fault on it desynchronises the card from the host, whose independent derivation
+   then refuses the first record). `CREATE` `P1 = 0x00` draws `t` into a cleared buffer checked
+   non-zero, computes the seed twice into separate buffers, compares them, and checks the seed
+   non-zero before any use (§9.4). Every copy of seed material or of an access hash into a
+   staging buffer that feeds T-CREATE, T-CHANGE, T-INSTALL or an `EXPORT` `P1 = 0x01` payload is
+   compared in constant time with its source before the effect.
+6. Every signature is self-verified before output (§12): ECDSA with `verifyPreComputedHash`
    under the leaf public key computed by public derivation (`K_par + IL·G`) for a non-hardened
    leaf, or `k_leaf·G` for a hardened leaf; BIP-340 per BIP-340 `Verify` with
    `Q = P_even + t·G`; Ed25519 by `S·G_W = R + k·A`. Self-verification detects faults in the
@@ -1157,13 +1174,13 @@ belongs to a past transfer or ciphertext (§3 item 7).
    from the same private value, so a fault that rewrote that value before signing is not detected
    by the card; the host's verification against the public key it cached for that path rejects
    such a signature.
-6. Secret products are computed on two additive shares re-drawn uniformly for every signature
+7. Secret products are computed on two additive shares re-drawn uniformly for every signature
    (`d = d₁ + d₂ mod n`, `a = a₁ + a₂ mod ℓ`) and recombined in this order:
    `s = ((k + e·d₁) mod n + e·d₂) mod n` and `S = ((r + k·a₁) mod ℓ + k·a₂) mod ℓ`. No intermediate
    value equals `e·d` or `k·a`.
-7. Every input to `ALG_RSA_NOPAD` is reduced below the modulus in constant time before use (§3
+8. Every input to `ALG_RSA_NOPAD` is reduced below the modulus in constant time before use (§3
    item 1): `a + b` by one conditional subtraction of `m`, `a − b` as `a − b + m`.
-8. An exception from `PACE_GM` or `PLAIN_XY` caused by an infinite result during BIP-32 child
+9. An exception from `PACE_GM` or `PLAIN_XY` caused by an infinite result during BIP-32 child
    derivation is an invalid child (`6A80`, §10.3); any other unexpected exception is `6F00`.
 
 ### 16.3 Secrets and wiping
@@ -1208,44 +1225,46 @@ host-side round trip including transport; median / p95 ms, n):
 
 | Command | median | p95 | n |
 | --- | --- | --- | --- |
-| `SELECT` | 31 | 31 | 20 |
-| `GET_IDENTITY` | 29 | 29 | 1 |
-| initialisation step (max) | 148 | 148 | 7 |
-| `PERSONALIZE` | 603 | 603 | 1 |
-| `OPEN` | 317 | 318 | 20 |
-| `STATUS` | 33 | 33 | 20 |
+| `SELECT` | 32 | 32 | 20 |
+| `GET_IDENTITY` | 30 | 30 | 1 |
+| initialisation step (max) | 136 | 136 | 7 |
+| `PERSONALIZE` | 610 | 610 | 1 |
+| `OPEN` | 345 | 346 | 20 |
+| `STATUS` | 34 | 34 | 20 |
 | `VERIFY` right | 215 | 216 | 20 |
-| `VERIFY` wrong | 80 | 80 | 20 |
-| `WAIT` | 969 | 969 | 20 |
-| `CREATE` `P1 = 0` | 207 | 208 | 20 |
-| `CREATE` `P1 = 1` | 202 | 203 | 20 |
-| `ERASE` | 54 | 54 | 40 |
-| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 412 | 20 |
+| `VERIFY` wrong | 80 | 81 | 20 |
+| `WAIT` | 970 | 970 | 20 |
+| `CREATE` `P1 = 0` | 228 | 228 | 20 |
+| `CREATE` `P1 = 1` | 212 | 213 | 20 |
+| `ERASE` | 55 | 55 | 40 |
+| `PUBLIC_KEY` secp256k1, depth 5, cold | 411 | 412 | 20 |
 | `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
-| `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
-| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 152 | 20 |
-| `SIGN_ECDSA`, depth 5, cold | 604 | 607 | 20 |
-| `SIGN_ECDSA`, depth 5, warm | 316 | 316 | 20 |
-| `SIGN_BIP340` (tweak), cold | 1060 | 1061 | 20 |
-| `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
-| `SIGN_ED25519` begin, cold | 498 | 499 | 60 |
-| `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
-| `SIGN_ED25519` finish, cold | 670 | 674 | 60 |
+| `PUBLIC_KEY` ed25519, depth 5, cold | 255 | 255 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, warm | 152 | 152 | 20 |
+| `SIGN_ECDSA`, depth 5, cold | 603 | 606 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 316 | 318 | 20 |
+| `SIGN_BIP340` (tweak), cold | 1058 | 1059 | 20 |
+| `SIGN_BIP340` (tweak), warm | 770 | 770 | 20 |
+| `SIGN_ED25519` begin, cold | 499 | 500 | 60 |
+| `SIGN_ED25519` update (236 B) | 47 | 47 | 880 |
+| `SIGN_ED25519` finish, cold | 671 | 675 | 60 |
 | `OFFER` first | 217 | 217 | 1 |
-| `OFFER` valid | 163 | 163 | 20 |
-| `EXPORT` `P1 = 0x00` | 1060 | 1064 | 10 |
-| `EXPORT` `P1 = 0x01` | 61 | 61 | 10 |
-| `IMPORT` `P1 = 0x00` | 1129 | 1131 | 10 |
-| `IMPORT` `P1 = 0x01` | 255 | 256 | 10 |
+| `OFFER` valid | 164 | 164 | 20 |
+| `EXPORT` `P1 = 0x00` | 1148 | 1151 | 10 |
+| `EXPORT` `P1 = 0x01` | 71 | 72 | 10 |
+| `IMPORT` `P1 = 0x00` | 1155 | 1159 | 10 |
+| `IMPORT` `P1 = 0x01` | 265 | 265 | 10 |
 
 The slowest command (`IMPORT` `P1 = 0x00`, which decompresses and verifies the peer key in
 each evaluation, §16.2) has a margin of 1.3× to the limit; `WAIT` 1.5× (1.1× at the 1100 ms
 upper bound of §3 item 9). A command record costs about
-33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
-⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,397 ms cold
-(498 + 5 × 46 + 670). `EXPORT`/`IMPORT` are timed against a member emulated by the host
+34 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,403 ms cold
+(499 + 5 × 47 + 671). `EXPORT`/`IMPORT` are timed against a member emulated by the host
 — the two-card flow on silicon is not run. `docs/architecture.md` §10 lists the real-card
-timing suite.
+timing suite. The table is the run recorded in
+`realcard/aeb9012eb1140194b16b4661cf433ca5d94cf83d877fd1d5e1aa6c368a66efab.txt`, on the
+build with the item 5 derivation and staged-copy gates.
 
 ### 16.7 Randomness
 

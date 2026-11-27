@@ -303,6 +303,11 @@ public class APDUProxy {
         if (bOff < 0 || remainingBytes >= 1 && (bOff + 1) > buffer.length) {
             APDUException.throwIt(APDUException.BUFFER_BOUNDS);
         }
+        SimulatorSystem.receiveCalls++;
+        if (SimulatorSystem.receiveStall) {
+            ramVars[CURRENT_STATE] = javacard.framework.APDU.STATE_FULL_INCOMING;
+            return 0;
+        }
         short pre = (short) (ramVars[PRE_READ_LENGTH] & 0xff);
         if (pre != 0) {
             ramVars[PRE_READ_LENGTH] = 0;
@@ -315,6 +320,12 @@ public class APDUProxy {
         }
         if (remainingBytes != 0) {
             short len = getIncomingLength();
+            if (SimulatorSystem.receiveChunk > 0 && len > SimulatorSystem.receiveChunk) {
+                len = SimulatorSystem.receiveChunk;
+            }
+            if (len > remainingBytes) {
+                len = remainingBytes;
+            }
             remainingBytes -= len;
             ramVars[REMAINING_BYTES] = remainingBytes;
             if (remainingBytes == 0) {
@@ -696,6 +707,14 @@ public class APDUProxy {
             return ISO7816.OFFSET_CDATA + 2;
         }
         return ISO7816.OFFSET_CDATA;
+    }
+
+    /**
+     * Sim-only switch: {@code receiveBytes} delivers at most {@code n} bytes per call, so the
+     * applet's multi-block receive loop is reachable; {@code n ≤ 0} restores single delivery.
+     */
+    public static void setReceiveChunk(short n) {
+        SimulatorSystem.receiveChunk = n;
     }
 
     /**

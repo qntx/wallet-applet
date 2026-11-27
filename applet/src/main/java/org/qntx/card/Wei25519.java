@@ -115,7 +115,7 @@ final class Wei25519 {
 
     /**
      * {@code out = scalar·point} (65-byte uncompressed) via PLAIN_XY, the {@link #mulBase} sibling
-     * for the Ed25519 self-verification's {@code c·A} (§16.2 item 5); {@code scalar} is already
+     * for the Ed25519 self-verification's {@code c·A} (§16.2 item 6); {@code scalar} is already
      * reduced below {@code ℓ} and the scalar slot is overwritten in a {@code finally}.
      */
     short mul(byte[] scalar, short sOff, byte[] point, short pOff, byte[] out, short oOff) {
@@ -130,7 +130,7 @@ final class Wei25519 {
 
     /**
      * {@code out = s·G_W + H} (65-byte uncompressed) via the shared {@link Mem#paceGm} engine — the
-     * {@code S·G_W + T} of the Ed25519 self-verification (§16.2 item 5). The output must not
+     * {@code S·G_W + T} of the Ed25519 self-verification (§16.2 item 6). The output must not
      * overlap {@code h}; the scalar slot is overwritten in a {@code finally}.
      */
     short mulAdd(byte[] s, short sOff, byte[] h, short hOff, byte[] out, short oOff) {

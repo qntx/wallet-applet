@@ -239,6 +239,12 @@ final class Const {
     /** §4.3: the number of initialisation steps (indexes 0 … INIT_STEPS − 1 of {@code init}). */
     static final short INIT_STEPS = 7;
 
+    /**
+     * The two big-endian block counters of {@link Kdf#kdf} (§1): {@code u32(1) ‖ u32(2)} — a
+     * constant so the counter is a load, never a store a fault can drop (§16.2 item 4).
+     */
+    static final byte[] KDF_COUNTER = {0, 0, 0, 1, 0, 0, 0, 2};
+
     static final short SESSION_OPEN = (short) 0x6699;
     static final short PENDING_STREAM = (short) 0x6969;
     static final short PENDING_EXPORT = (short) 0x6996;

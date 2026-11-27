@@ -61,7 +61,7 @@ tests (§14); later stages may extend a class only as their acceptance tables st
 | `State` | The one persistent array `state` and its field offsets (§4); coded reads and writes of `life`, `origin`, `offer`, `fails`; every class writes its fields only through `State`, inside its named transaction | §4.2 | core |
 | `Wallet` | Persistent wallet fields incl. the seed fingerprint `fp`, wrap/unwrap (§10.1), failure counter, `STATUS`, `CREATE`, `VERIFY` with the two independent counter reads and the read-back gate, `CHANGE`, `ERASE`, `WAIT`, `WalletInfo` | §4, §7, §9.3–9.7, §9.15, §10.1 | wallet |
 | `Derivation` | HMAC-SHA512, BIP-32, SLIP-10, master keys, node caches, `PUBLIC_KEY` | §9.8, §10.2–10.4 | wallet |
-| `ModArith` | Modular multiply/square through `ALG_RSA_NOPAD` (keys `(ℓ,2)`, `(n,2)`, `(p,2)`, `(p,(p+1)/4)`); constant-time 256-bit add, subtract, reduce, conditional negate; constant-time reduction of every RSA input below the modulus; share splitting | §16.2.6, §16.4 | wallet |
+| `ModArith` | Modular multiply/square through `ALG_RSA_NOPAD` (keys `(ℓ,2)`, `(n,2)`, `(p,2)`, `(p,(p+1)/4)`); constant-time 256-bit add, subtract, reduce, conditional negate; constant-time reduction of every RSA input below the modulus; share splitting | §16.2.7, §16.4 | wallet |
 | `Wei25519` | Wei25519 domain, `x·B` (no Edwards encoding on the card; the map is host-side, §10.4) | §10.4 | wallet |
 | `Ecdsa` | `SIGN_ECDSA`: sign, independent leaf public key, self-verify with rotating verify keys | §9.9, §12.1 | sign |
 | `Bip340` | `SIGN_BIP340`: tweak, BIP-340 signing with masked `e·d`, self-verify | §9.10, §12.2 | sign |
@@ -342,8 +342,11 @@ Coded constants (RM(1,4) codewords, pairwise Hamming distance ≥ 8, generated a
 | Seed fingerprint: after a match, `fp'` recomputed and compared with the stored `fp` (constant time, twice) before T-OK (§9.5 step 8) | `Wallet.verify` |
 | Verification results coded as `CHECK_OK`/`CHECK_FAIL`/`CHECK_MALFORMED` (§16.2 item 1): `Secp256k1.verifyHash` derives the coded result from the engine's boolean through two independent conditionals (`CHECK_FAIL ^ CHECK_STEP_1 ^ CHECK_STEP_2 = CHECK_OK`), so a single skipped branch yields a non-codeword every caller rejects. Double evaluation of a verification means recomputation, never a stored-result re-test: the transfer gates listed in the next row, `Identity.personalize`'s certificate (`verify` run twice), `Ecdsa` self-verification (`verifyHash` run twice); the BIP-340 and Ed25519 self-verifications compute `V` once and evaluate the comparison twice; the `Session.unwrap` record tag is computed once and compared twice; the `Identity.signHash` self-verification is evaluated once — releasing a bad identity signature needs a computation fault plus a skipped check | `Secp256k1.verifyHash`, `Identity`, `Ecdsa`, `Bip340`, `Ed25519`, `Session.unwrap`, `Transfer` |
 | Independent recomputation of every check that gates seed export, the peer-key slot write or seed import (§16.2 item 4): each such check is evaluated once at its checking-order position (data error → `6A80`, missing condition → `6985`) and again by recomputation immediately before the effect it guards (`6F00`), reusing no result, flag, hash or key-object content of the first evaluation: `EXPORT` `P1 = 0x00` — certificate (`Identity.verifyCert`), membership (`memberSlot`, members re-read and IDs recomputed, the slot index compared) and `sig_T` (`offerSignature`: `A_T` decompressed again and compared in constant time with the peer-key slot read back by `getW`, the offer hash recomputed into a separate buffer, the verification repeated), recomputed after `hashM` and before `signHash`, which writes `sig_S` over the certificate's signature and `LK_T` in the buffer, and before the pending export keys and `E` are produced; `EXPORT` `P1 = 0x01` — the pending-export state checked on the pending word and then on a separate shadow word holding `PENDING_EXPORT_SHADOW`, before the payload is encrypted under `K_te`; `IMPORT` `P1 = 0x00` — certificate and, when not `BLANK`, membership with `life` read again before the peer-slot `setW`, `sig_S` (`verifyHash`: `A_S` decompressed again and compared with the slot read back, `A` and `LK` re-read, `TH` recomputed into a separate buffer, the verification repeated) before the pending import keys are derived from the recomputed `TH`; `IMPORT` `P1 = 0x01` — the MAC recomputed before the in-place decryption, and, when not `BLANK`, the three re-seal equality checks plus `life` equal to a value read again before T-INSTALL; `OFFER` — `life` before T-OFFER; `EXPORT` `P1 = 0x01` — `verified` (the shadow word) before the payload; the `LOADED`-only checks are written `if (life != BLANK)` so a skipped branch enters them. The peer-key slots hold `P_init` until written — a point whose discrete logarithm is unknown, so a slot never silently behaves as a key the attacker controls. Ending a pending state overwrites `K_te`/`K_tm` with fresh random values, never a constant, so a pending check bypassed by a fault encrypts/MACs under keys nobody holds | `Transfer`, `Session.endPending` |
-| Self-verification of every signature (§16.2.5): detects faults in the signing computation; for hardened ECDSA leaves and Ed25519 it does not detect a fault that rewrote the private key before signing — the host's check against the cached public key does; `Ecdsa` recomputes the verification twice, `Bip340`/`Ed25519` compute `V` once and evaluate the comparison twice, so a forced result needs a second, matching fault in the signing computation | `Ecdsa` (leaf public key via `PACE_GM(IL, K_par)` for non-hardened leaves), `Bip340` (`Q = P_even + t·G` via `PACE_GM`; check `s·G + (−e·Q) = R`), `Ed25519` (`S·B + (−k·A) = R`) |
-| Share masking of secret products with the §16.2.6 order: `s = ((k + e·d₁) mod n + e·d₂) mod n`, `S = ((r + k·a₁) mod ℓ + k·a₂) mod ℓ`; `d₁`, `a₁` fresh uniform per signature; no intermediate equals `e·d` or `k·a` | `ModArith.mulMasked`, used by `Bip340` and `Ed25519` |
+| Key and seed derivations computed twice and compared (§16.2 item 5): `EXPORT`/`IMPORT` `P1 = 0x00` derive the transfer keys from two ECDH products in separate buffers — the scalar `e` is loaded twice and the range check repeated — with two `Kdf.kdf` calls whose outputs are compared in constant time before any `setKey`, and each loaded key is read back by `getKey` and compared; `OPEN` derives its session keys by two KDFs compared and read back the same way and re-checks `x` in range; `CREATE` `P1 = 0x00` draws `t` into a wiped slot checked non-zero and computes the seed twice into separate buffers, compared and checked non-zero (§9.4) | `Transfer.export0`/`import0`, `Transfer.loadKeys`, `Session.open`, `Secp256k1.inRange`, `Wallet.create` |
+| Staged copies compared with their source (§16.2 item 5): every copy of seed material or of an access hash into a staging buffer that feeds T-CREATE, T-CHANGE, T-INSTALL or an `EXPORT` `P1 = 0x01` payload is followed by a constant-time `Bytes.equal` against the source — a skipped or mis-offset copy can only make the values differ | `Wallet.create` (seed, access hash), `Wallet.install` (seed, access hash), `Wallet.change` (access hash), `Transfer.export1` (seed, `accessHash_T`) |
+| Bounded APDU reception: `receiveAll` faults `6F00` on a `receiveBytes` call that returns 0 bytes, so a transport or platform that stalls delivery faults instead of spinning | `WalletApplet.receiveAll` |
+| Self-verification of every signature (§16.2.6): detects faults in the signing computation; for hardened ECDSA leaves and Ed25519 it does not detect a fault that rewrote the private key before signing — the host's check against the cached public key does; `Ecdsa` recomputes the verification twice, `Bip340`/`Ed25519` compute `V` once and evaluate the comparison twice, so a forced result needs a second, matching fault in the signing computation | `Ecdsa` (leaf public key via `PACE_GM(IL, K_par)` for non-hardened leaves), `Bip340` (`Q = P_even + t·G` via `PACE_GM`; check `s·G + (−e·Q) = R`), `Ed25519` (`S·B + (−k·A) = R`) |
+| Share masking of secret products with the §16.2.7 order: `s = ((k + e·d₁) mod n + e·d₂) mod n`, `S = ((r + k·a₁) mod ℓ + k·a₂) mod ℓ`; `d₁`, `a₁` fresh uniform per signature; no intermediate equals `e·d` or `k·a` | `ModArith.mulMasked`, used by `Bip340` and `Ed25519` |
 | Structural binding of the seed to the code (D6) | `Wallet.verify`/`unwrap` decrypt only after `CHECK_OK` |
 | Constant time (§16.4); every RSA operand reduced below the modulus in constant time before `doFinal` | `Bytes.equal`, `ModArith` (fixed loop bounds, masks instead of branches) |
 | Point rule (§16.5): explicit on-curve check; decompression `y = (x³+7)^((p+1)/4)` with `y²` check and parity (§10.5) | `Secp256k1.onCurve`/`decompress` used by `Transfer.export0`/`import0`; `Identity.personalize` checks `caKey` explicitly |
@@ -360,25 +363,64 @@ and a release needs the faults listed in the last column.
 | `EXPORT` `P1 = 0x00` certificate | `verifyCert` (`6A80`) | `verifyCert` again before `signHash` (`6F00`) | command data (attacker-chosen anyway); `caKey`, written only by T-PERSO; SHA-256/ECDSA engines, re-initialised per call | refused | both evaluations faulted |
 | `EXPORT` `P1 = 0x00` membership | `memberSlot` (`6A80`) | `memberSlot` again, slot compared (`6F00`) | persistent `members` and the identity key, re-read | refused | both evaluations faulted |
 | `EXPORT` `P1 = 0x00` `sig_T` | `offerSignature` under the slot written by `setPeer` (`6A80`) | `A_T` decompressed again and compared with the slot's `getW`; offer hash into its own buffer; `verifyHash` again (`6F00`) | the slot key object — its content is compared with the recomputed key before the second verification; a slot that was not written holds `P_init` or another member's key, under which no attacker signature verifies; the slot index, bound by the membership recompute and the read-back | refused | both verifications faulted |
-| `EXPORT` `P1 = 0x01` pending export | pending word `= PENDING_EXPORT` (`6985`) | shadow word `= PENDING_EXPORT_SHADOW` (`6F00`) | none — two words, two codes; outside a pending export `K_te`/`K_tm` hold fresh random values | refused | both words faulted, plus `K_te` and `K_tm` known (each needs its own skipped random overwrite, or an RNG failure) |
+| `EXPORT` `P1 = 0x01` pending export | pending word `= PENDING_EXPORT` (`6985`) | shadow word `= PENDING_EXPORT_SHADOW` (`6F00`) | none — two words, two codes; outside a pending export `K_te`/`K_tm` hold fresh random values | refused | both words faulted, plus `K_te` and `K_tm` known (each needs its own skipped random overwrite, or an RNG failure) — and with the pending state genuine, knowing the keys additionally needs faults on both derivations of the transfer-key row below |
 | `EXPORT` `P1 = 0x01` and every verified-only command: `verified` | dispatch gate and first check on the `verified` word (`6982` / `6F00`) | last check before the effect on the shadow word (`6F00`) | none — two words, two codes; in an unverified session the seed is zero (D6) | refused | both words faulted (and the effect then operates on a zero seed) |
 | `IMPORT` `P1 = 0x00` certificate | `verifyCert` (`6A80`) | `verifyCert` again before the slot write (`6F00`) | as in the `EXPORT` certificate row | refused | both evaluations faulted |
 | `IMPORT` `P1 = 0x00` membership (`LOADED`) | `memberSlot` with `life` read at command start (`6A80`) | `memberSlot` again with `life` read again (`6F00`) | persistent `members`, re-read | refused | both evaluations faulted |
 | `IMPORT` `P1 = 0x00` `sig_S` | `verifyHash` under the slot over `TH` (`6A80`) | `A_S` decompressed again and compared with the slot's `getW`; `A`, `LK` re-read; `TH` recomputed into its own buffer; `verifyHash` again; the pending import keys derived from the recomputed `TH` (`6F00`) | the slot key object and index, bound as in the `sig_T` row | refused | both verifications faulted |
-| `IMPORT` `P1 = 0x01` MAC | `mac` (`6A80`) | `mac` again before the in-place decryption (`6F00`) | `K_tm`/`K_te`, derived once by `IMPORT` `P1 = 0x00` from the twice-verified transcript (random outside a pending import): a fault that makes `K_tm` known passes both MAC evaluations, but the payload still decrypts under `K_te` | refused | both MAC evaluations faulted, or `K_tm` and `K_te` both known |
+| `IMPORT` `P1 = 0x01` MAC | `mac` (`6A80`) | `mac` again before the in-place decryption (`6F00`) | `K_tm`/`K_te`, derived twice and compared under §16.2 item 5 — a single fault on a product, a KDF, the compare or a `setKey` is refused before any key is loaded (random outside a pending import): a fault that makes `K_tm` known passes both MAC evaluations, but the payload still decrypts under `K_te` | refused | both MAC evaluations faulted, or `K_tm` and `K_te` both known |
 | `IMPORT` `P1 = 0x01` re-seal (`LOADED`) | `reseal` (`6A80`) | each check again before T-INSTALL with `life` read again; `Wallet.install` re-reads `life` twice (`6F00`) | the decrypted payload (authentic only under the transfer keys) and the persistent `fp`/`origin`/`members`, re-read | refused | both evaluations faulted |
+| Transfer key derivation (`EXPORT` `P1 = 0x00`) | `agree(ephKey, LK_T)` + `Kdf.kdf` over `TH` → `K1` | `mul(e, LK_T)` + `Kdf.kdf` over the same `TH` → `K2`, compared, then each key read back by `getKey` and compared with `K2` | `e` — loaded twice, a fault on one load desynchronises the two products; `Z` of each product — one fault changes one `K`, the compare refuses; `TH` — shared by both derivations and public context, so a fault on it yields consistent keys that are still secret (`Z` stays secret) and a `sig_S` the target rejects; the KDF scratch — no buffer is shared between the two derivations | refused | two matching faults (both products or both comparisons faulted in the same direction) |
+| Transfer key derivation (`IMPORT` `P1 = 0x00`) | `agree(linkPrivate, E)` + `Kdf.kdf` over `TH` → `K1` | `agree(linkPrivate, E)` + `Kdf.kdf` over the independently recomputed `TH` → `K2`, compared, `getKey` read-back as in the `EXPORT` row | as in the `EXPORT` row, but both `agree` calls use the persistent `linkPrivate` key object directly — no `setS` is involved; it is written only inside T-OFFER/T-CREATE/T-INSTALL/T-ERASE | refused | two matching faults (both products or both comparisons faulted in the same direction) |
+| Session key derivation (`OPEN`) | `Kdf.kdf` → `K1` (`kce ‖ kcm ‖ kre ‖ krm`) | `Kdf.kdf` → `K2`, compared; each `setKey` read back by `getKey` and compared | `Z` — shared: a fault on it desynchronises the card from the host, whose independent derivation refuses the first record; `x` — range-checked twice | refused | both KDFs faulted identically, or both comparisons faulted |
+| `CREATE` seed | `seedHash` → `mem.seed` | `seedHash` again → `H`, compared, then `mem.seed` checked non-zero | the draw `t` — its slot is wiped first and checked non-zero after the draw; `hostEntropy` and the label — public command input | refused | both `seedHash` computations faulted identically, or the draw plus both compares faulted |
+| Staged copies (seed and access hashes into `H`/`W` before T-CREATE/T-CHANGE/T-INSTALL and the `EXPORT` `P1 = 0x01` payload) | the `arrayCopy` itself | `Bytes.equal` against the source, constant time | the source — persistent state or command data re-read; a fault on it makes the compare fail, never pass | refused | the copy plus the compare both faulted |
 | `VERIFY` step 2 | `f_a` | `f_b` | none (independent reads) | refused | both reads faulted |
 | `VERIFY` step 6 read-back | fresh read `= f_b + 1` | fresh read `= f_c + 1` | none (three independent reads) | refused | the skipped T-FAIL write plus matching faults on both `f_b` and `f_c` |
 | `VERIFY` step 7 match | KDF108 + CMAC | KDF108 + CMAC again | the candidate (command data) and the stored `wrapKey`/`ct`/`tag`, re-read: a forced match without the code decrypts garbage, which fails step 8 | refused | both matches and both fingerprint comparisons faulted |
 | `VERIFY` step 8 fingerprint | `fp'` vs stored `fp` | recomputed and re-read | the decrypted seed (one decryption): a fault on it makes both comparisons fail, never pass | refused | both comparisons faulted |
-| Self-verification (§16.2 item 5) — ECDSA | `verifyHash` | `verifyHash` again | the leaf public key and its verify slot, written once: a fault on them makes a correct signature fail; it cannot make a faulty signature verify | refused | a faulty signature plus both verifications faulted |
+| Self-verification (§16.2 item 6) — ECDSA | `verifyHash` | `verifyHash` again | the leaf public key and its verify slot, written once: a fault on them makes a correct signature fail; it cannot make a faulty signature verify | refused | a faulty signature plus both verifications faulted |
 | Self-verification — BIP-340 / Ed25519 | `V = R` compared | compared again | `V`, computed once: releasing a faulty signature needs `V` to equal its `R` — a second, matching fault | refused | a faulty signature plus a matching fault on `V` (or both comparisons) |
 | `Identity.signHash` self-verification | once | — | — | a computation fault alone is refused | a computation fault plus a skipped check |
 | `verifyHash` coded result | — | — | the engine boolean belongs to one call; every gate's two evaluations are two calls | one skipped conditional yields a non-codeword; a corrupted boolean affects one evaluation | — |
 
-The simulator's single-fault sweep (`GateSweepTest`, §9) re-runs each attack path once per
-executed branch, call and woven result with that one fault injected and requires every run
-refused.
+The simulator's single-fault sweep (`GateSweepTest`, §9) instruments the applet with five
+site kinds — branches, invokes, data loads, stores and arithmetic — and, per scenario, counts
+one unfaulted run (which must be refused), then re-runs the scenario on a fresh card once per
+(site, occurrence, mode) under a watchdog of fifty times the counting run's site hits. Branch
+sites are swept TAKE and FALL; invoke sites SKIP and — for `short`/`byte`/`boolean` results,
+applet and Java Card API calls alike — FORCED to every coded value of `Const`; data loads
+ZERO, ONES and FLIP; stores skipped; arithmetic evaluated to its left operand. Data, store
+and arithmetic faults are woven only inside the gate methods this section lists; branch and
+invoke faults apply to every applet method. Branch and invoke sites are swept at every
+occurrence; a data, store or arithmetic site executed more than eight times is sampled at
+occurrences {1, 2, 3, last} plus four evenly spaced ones (each CSV row carries a `sampled`
+flag).
+
+Two scenario families are swept. The attack scenarios replay an outsider's path — `VERIFY`
+with a wrong code at each count boundary, the unverified forms of `CHANGE`, `ERASE`,
+`PUBLIC_KEY` and the three signing commands, `EXPORT` to a non-member, a foreign-batch or
+attacker-keyed target, `EXPORT` with no pending offer, `IMPORT` of an attacker seed, a
+different wallet and a zero-key record — and require every faulted run refused exactly as the
+unfaulted one is. The legitimate-flow scenarios run a genuine command and judge the released
+effect against the public candidate set (zero, the card's compressed identity and its hash, a
+genuine member's identity and certificate, the public windows of the scratch arrays): `SXe`
+(export, predicate R-X — the payload keys must need the target's link key), `SIe` and `SIn`
+(import and install, R-I — the pending keys must need the source's `e`), `SCr` (`CREATE`
+P1=0, R-C — the seed must come from the card's own random), `SCi` (`CREATE` P1=1, R-S — the
+stored seed is the one sent), `SCh` (`CHANGE`) and the access-binding half of `SCr`/`SCi`/
+`SIn` (R-A — the stored wrap opens only under the access hash the host sent, evaluated
+host-side from `ct`/`tag` and the stored `wrapKey`), and `SO` (`OPEN`, R-O — the session
+keys are neither equal under two RNG draws nor in the candidate set). `SXe` and `SO` also
+release when the produced ephemeral equals `s·G` for any scalar `s` taken from the public
+windows — the blob bytes, public scratch windows, transcript hash, point x-coordinates and
+0x00…01 — because such an ephemeral lets the peer derive the same keys — the public-ephemeral clause. An outcome
+whose keys
+differ from correct but match no candidate is DEVIATED — listed, not a failure; a run
+exceeding the watchdog is a HANG row; the test fails only on RELEASED. Every release
+predicate is pinned by `GateSweepPredicateTest`, which arms a deliberate fault combination
+that must RELEASED (e.g. skipping a staged copy together with forcing its comparison) so a
+vacuously-false predicate cannot pass unnoticed.
 
 ## 7. Build system and toolchain
 
@@ -494,7 +536,7 @@ details), RF behaviour, GlobalPlatform. These are the real-card suite (§10).
 | Reference host | `host` module implements the host side from `protocol.md` only (no applet code imported); all command tests drive the card through it | `host`, `tests` |
 | Fuzz | Jazzer on `Session.unwrap` + inner dispatch (random records with valid keys), on every parser (`path`, certificates, payload) | `tests` |
 | Mutation | PIT on `applet` classes with the command and tearing suites; the gates of each stage (listed in §14) must have no surviving mutant; the report is attached to each PR | `tests` |
-| Fault mutants | Hand-written fault mutants are the primary fault evidence (PIT mutates JVM bytecode, not CAP instruction skips): delete the T-FAIL call; delete `commitTransaction` (assert abort, T-ERASE, `6F00`, card `BLANK`, no comparison); overwrite `f_a` with a smaller value after its complement check; overwrite the value T-FAIL writes; skip the `f ≥ L` test with `f = L`; force one comparison branch to pass; force the fingerprint check; skip the `WAIT` gate (assert the comparison count still stays ≤ L); skip `ERASE`'s `verified` gate; skip each `IMPORT` equality check in `LOADED`. Each asserts no uncounted comparison, no T-OK and no output, per P2/P3 of `threat-model.md`. The mutation gate also comprises the single-fault sweep `GateSweepTest` (instruction-site skip, branch inversion, forced coded results, forced ECDSA verification — every attack path re-run once per executed site, every run refused) and `ReviewMutantTest` (persistent instruction-site faults Q01/Q02 at `Transfer.setPeer`) | `tests` |
+| Fault mutants | Hand-written fault mutants are the primary fault evidence (PIT mutates JVM bytecode, not CAP instruction skips): delete the T-FAIL call; delete `commitTransaction` (assert abort, T-ERASE, `6F00`, card `BLANK`, no comparison); overwrite `f_a` with a smaller value after its complement check; overwrite the value T-FAIL writes; skip the `f ≥ L` test with `f = L`; force one comparison branch to pass; force the fingerprint check; skip the `WAIT` gate (assert the comparison count still stays ≤ L); skip `ERASE`'s `verified` gate; skip each `IMPORT` equality check in `LOADED`. Each asserts no uncounted comparison, no T-OK and no output, per P2/P3 of `threat-model.md`. The mutation gate also comprises the single-fault sweep `GateSweepTest` (branch take/fall, invoke skip and forced coded results including Java Card API calls, data-load zero/ones/flip, store skip, arithmetic keep-left, forced woven calls and ECDSA verification — every scenario re-run once per executed site; §6) and `ReviewMutantTest` (persistent instruction-site faults Q01/Q02 at `Transfer.setPeer`) | `tests` |
 | Real card | §10, gated by `-PrealCard=<reader>`; never run in CI; reports "not run" | `tests/src/realCard` |
 
 ## 10. Real-card suite and silicon admission
@@ -543,16 +585,18 @@ card of `REALCARD.md`, never a production batch.
 Rows 1–9 are the admission items of `protocol.md` §3. Evidence lands under `-PrealCardOut`
 (default `tests/build/realcard/`): the `*.json`/`*.bin` reports above plus `apdu.log`,
 `gp-*.log` and `cplc.bin`, which feed the batch record. A run with a reader ends with
-`record.txt` (the `realCardRecord` task, `finalizedBy` `realCard`): the run's CAP sha256,
-reader, per-class `PASS`/`FAIL`/`SKIP` and the timing table — committed as
+`record.txt` (the `realCardRecord` task, `finalizedBy` `realCard`): the `record 3`
+format — the run's CAP sha256, commit, the five `tree-*` lines of `tests`/`applet`/
+`host`/`sim`/`buildSrc`, the effective run parameters, reader, the card's identity
+files, totals, per-class `PASS`/`SKIP` verdicts and the timing table — committed as
 `realcard/<cap-sha256>.txt` before a tag (§12). Audit-impl ran admission 1–5 and 7 on
 development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPLC IC type
 `D321`, batch `2092`) and they passed
 (`$A/audit-impl/evidence/card/functional.out`); admission must be repeated on each production
 batch. Multi-card flows are simulation-only while only one development card exists.
 
-Final card-A run (2026-11-25, CAP sha256 `39cc8dac…6ea9a436`, record
-`realcard/39cc8dac….txt`): the whole suite passed once,
+Final card-A run (2026-11-27, CAP sha256 `aeb9012e…6efab`, record
+`realcard/aeb9012e….txt`): the whole suite passed once,
 63 tests green, flows/tearing/NVM rows `unavailable` as designed; admission 6 ran the full
 §4.2 decision rule (80 × 10⁶ bits, every statistic's proportion and P-value_T inside bounds,
 `rng.json`); every timing row is inside its bound (`timing.md`, reproduced in the README;
@@ -596,7 +640,9 @@ behaviour is UNVERIFIED.
   size report. Actions pinned by commit SHA, `permissions: contents: read`.
 - `release.yml` (tags `v*`): a `gate` job runs `ci.yml` on the tagged commit; the release job
   then checks tag = version, requires a committed `realcard/<cap-sha256>.txt` record for the
-  CAP hash with `failed 0` and `InstallRealCardTest` PASS, rebuilds `build/dist/` with
+  CAP hash that is consistent with the tag — the commit an ancestor of HEAD, the five
+  `tree-*` lines the tagged trees, `params` the release parameters, `failed 0`, SKIP only
+  for `Flow`/`Nvm`/`Tearing` and `InstallRealCardTest` PASS — rebuilds `build/dist/` with
   toolchain auto-download off, re-proves the CAP reproducible, verifies `SHA256SUMS` and
   uploads `qntx-card.cap`, `card-sim.jar`, `vectors.zip`, the `tools` distribution, the
   CycloneDX SBOM; build provenance via `actions/attest-build-provenance`; release notes list

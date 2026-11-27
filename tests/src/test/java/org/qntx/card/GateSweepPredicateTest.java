@@ -294,4 +294,277 @@ final class GateSweepPredicateTest {
                         }),
                 GateSweepPredicateTest::verifiedWords);
     }
+
+    // ── legitimate-flow predicates (architecture §6) ──────────────────────
+
+    /** Every early {@code Bytes.equal} call returns CHECK_OK — a forced comparison. */
+    private static void forcedEquals() {
+        for (int i = 1; i <= 16; i++) {
+            Fault.arm("Bytes.equal", i, Const.CHECK_OK);
+        }
+    }
+
+    /** Like {@link #released} but judges the run by {@code outcome() == RELEASED}. */
+    private static void releasedOutcome(String name, GateSweepTest.Factory f, Runnable arm)
+            throws Exception {
+        GateSweepTest.Run r = f.fresh();
+        arm.run();
+        try {
+            r.run();
+        } catch (Throwable t) {
+            // the sw trail of a failed release attempt still lands in the message below
+        }
+        Fault.reset();
+        org.junit.jupiter.api.Assertions.assertEquals(
+                GateSweepTest.RELEASED,
+                r.outcome(),
+                name
+                        + ": the release predicate did not fire under a known multi-fault (sw: "
+                        + r.swSequence()
+                        + ")");
+    }
+
+    /**
+     * Probes the {@code sitePrefix#i<k>} invoke sites one at a time: each is skipped (at occurrence
+     * {@code nth}) together with {@code extraArms} until the scenario's outcome is RELEASED — used
+     * when the faulted API call (an {@code arrayCopy} or {@code nextBytes} inside the gate method)
+     * is not nameable through {@code Fault.armSkip}.
+     */
+    private static void releasedSkippingInvoke(
+            String name, GateSweepTest.Factory f, String sitePrefix, int nth, Runnable extraArms)
+            throws Exception {
+        GateSweepTest.Run probe = f.fresh();
+        Fault.countCalls();
+        try {
+            probe.run();
+        } catch (Throwable ignored) {
+        }
+        Map<String, Integer> sites = new TreeMap<>(Fault.siteCounts());
+        Fault.reset();
+        Map<String, Integer> outcomes = new TreeMap<>();
+        Map<String, String> sws = new TreeMap<>();
+        for (String key : sites.keySet()) {
+            if (!key.startsWith(sitePrefix + "#i")) {
+                continue;
+            }
+            GateSweepTest.Run r = f.fresh();
+            Fault.armSite(key, nth, Fault.SITE_SKIP);
+            if (extraArms != null) {
+                extraArms.run();
+            }
+            try {
+                r.run();
+            } catch (Throwable ignored) {
+            }
+            Fault.reset();
+            int outcome;
+            try {
+                outcome = r.outcome();
+            } catch (Throwable t) {
+                outcome = GateSweepTest.ERROR;
+            }
+            outcomes.put(key, outcome);
+            sws.put(key, r.swSequence());
+            if (outcome == GateSweepTest.RELEASED) {
+                return;
+            }
+        }
+        org.junit.jupiter.api.Assertions.fail(
+                name
+                        + ": no skipped "
+                        + sitePrefix
+                        + " invoke made the release predicate fire (outcomes: "
+                        + outcomes
+                        + ", sws: "
+                        + sws
+                        + ")");
+    }
+
+    @Test
+    void sxePredicate() throws Exception {
+        // both derivations' Kdf.kdf skipped (the Kdf invoke inside transferKey is a void
+        // call — the arm is an invoke-site skip), the cross-derivation compare forced: the
+        // record goes out under whatever scratch the unwritten key buffers held — public or
+        // zero material the candidate set covers
+        releasedSkippingInvoke("SXe", GateSweepTest.exportLegit(), "Transfer.transferKey", 0, null);
+    }
+
+    @Test
+    void siePredicate() throws Exception {
+        releasedSkippingInvoke("SIe", GateSweepTest.importLegit(), "Transfer.transferKey", 0, null);
+    }
+
+    @Test
+    void sxePublicEphemeralPredicate() throws Exception {
+        // row E8: ZERO on the first mul's scalar-offset load (Secp256k1.mul#d1, the iload of
+        // sOff — once per mul call, so nth=1 is the E = e·G one) reads the scalar from
+        // h[0..32) = the offer hash SHA-256("qntx-card/v1/offer"‖LK_T), a public value: the
+        // output E is then public-scalar while the Z product stays consistent, which the key
+        // candidates cannot see — the ephemeral clause must fire. The wrong scalar desyncs
+        // K1 from K2, so loadKeys' K1=K2 compare (i1) and the read-back compare (i7) are
+        // forced on top.
+        releasedOutcome(
+                "SXe-eph",
+                GateSweepTest.exportLegit(),
+                () -> {
+                    Fault.armSite("Secp256k1.mul#d1", 1, Fault.SITE_ZERO);
+                    Fault.armSite("Transfer.loadKeys#i1", 0, Fault.SITE_FORCED, Const.CHECK_OK);
+                    Fault.armSite("Transfer.loadKeys#i7", 0, Fault.SITE_FORCED, Const.CHECK_OK);
+                });
+    }
+
+    @Test
+    void soPublicEphemeralPredicate() throws Exception {
+        // row E8 on OPEN: the card's draw lands on x = 1 — cardEph = G, a public scalar,
+        // and Z = hostEph stays consistent, so the session opens and the response keys are
+        // the host's — only the ephemeral clause can see the release
+        releasedOutcome("SO-eph", GateSweepTest.openTwiceWith((i, k) -> k == 31 ? 1 : 0), () -> {});
+    }
+
+    @Test
+    void sinPredicate() throws Exception {
+        // the staged access-hash copy inside install skipped, its comparison forced: the
+        // installed wallet opens under the stale (public) hash the copy would have replaced
+        releasedOutcome(
+                "SIn",
+                GateSweepTest.installLegit(),
+                () -> {
+                    // the staged access-hash copy (i2) skipped, its site-forced comparison
+                    // (i9, the second Bytes.equal of install) — the wallet seals under the
+                    // stale staged hash, SHA-256(A_T) in the candidate set
+                    Fault.armSite("Wallet.install#i2", 0, Fault.SITE_SKIP);
+                    Fault.armSite("Wallet.install#i9", 0, Fault.SITE_FORCED, Const.CHECK_OK);
+                });
+    }
+
+    @Test
+    void sciPredicate() throws Exception {
+        releasedOutcome(
+                "SCi",
+                GateSweepTest.createImport(),
+                () -> {
+                    // the P1=01 access-hash copy (i29) skipped, its staged comparison (i32,
+                    // the last Bytes.equal of create) forced — sealed under the stale hash
+                    Fault.armSite("Wallet.create#i29", 0, Fault.SITE_SKIP);
+                    Fault.armSite("Wallet.create#i32", 0, Fault.SITE_FORCED, Const.CHECK_OK);
+                });
+    }
+
+    @Test
+    void schPredicate() throws Exception {
+        // A committed CHANGE bound to a public hash: send SHA-256(A) as the new access hash
+        // inside a record with a corrupted session tag, and force the unwrap's two tag
+        // compares (Session.unwrap#i11, #i13) — the forged CHANGE is accepted and the wallet
+        // is bound to a hash an outsider computes. Skipping the staged access-hash copy, by
+        // contrast, commits under whatever session material W_H held — never a public
+        // candidate (the session machinery rewrites W[0..32) every command), so that fault is
+        // DEVIATED, not RELEASED, and cannot drive this self-check.
+        Object[] f = GateSweepTest.loaded(new EmuMember());
+        org.qntx.card.sim.Card card = (org.qntx.card.sim.Card) f[0];
+        org.qntx.card.host.Session session = (org.qntx.card.host.Session) f[1];
+        byte[] a = (byte[]) f[2];
+        byte[] sha256A = org.qntx.card.host.Crypto.sha256(a);
+        GateSweepTest.Run r =
+                new GateSweepTest.Run() {
+                    @Override
+                    void run() throws Exception {
+                        byte[] forged = session.wrap(GateSweepTest.INS_CHANGE, 0, 0, sha256A);
+                        forged[forged.length - 1] ^= 1;
+                        byte[] rapdu = card.transmit(forged);
+                        try {
+                            sws.add(session.unwrap(rapdu).sw());
+                        } catch (Exception e) {
+                            sws.add(-1);
+                        }
+                    }
+
+                    @Override
+                    int outcome() throws Exception {
+                        byte[][] bound = new byte[1][];
+                        byte[] keys =
+                                GateSweepTest.accessBound(card, java.util.List.of(sha256A), bound);
+                        return keys != null ? GateSweepTest.RELEASED : GateSweepTest.REFUSED;
+                    }
+                };
+        Fault.armSite("Session.unwrap#i11", 0, Fault.SITE_FORCED, Const.CHECK_OK);
+        Fault.armSite("Session.unwrap#i13", 0, Fault.SITE_FORCED, Const.CHECK_OK);
+        try {
+            r.run();
+        } catch (Throwable ignored) {
+        } finally {
+            Fault.reset();
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(
+                GateSweepTest.RELEASED, r.outcome(), "SCh: forced tag compare did not release");
+    }
+
+    @Test
+    void scrPredicate() throws Exception {
+        // nextBytes skipped leaves the wiped 0³² as t; the zero check and the double
+        // derivation's comparison are forced — the stored seed is the computable zero-t
+        // candidate
+        releasedSkippingInvoke(
+                "SCr",
+                GateSweepTest.createGenerate(),
+                "Wallet.create",
+                0,
+                () -> {
+                    for (int i = 1; i <= 16; i++) {
+                        Fault.arm("Bytes.isZero", i, Const.CHECK_FAIL);
+                        Fault.arm("Bytes.equal", i, Const.CHECK_OK);
+                    }
+                });
+    }
+
+    @Test
+    void soPredicate() throws Exception {
+        // the second block of both KDF derivations skipped (the second doFinal inside each
+        // Kdf.kdf call), the cross-comparison forced: the response keys are stale scratch —
+        // identical under both RNG blocks, so the equal-keys clause fires
+        // the shared-secret agree skipped leaves a stale Z — both RNG blocks then derive
+        // the same card keys (the equal-keys clause), or the second block of both KDF
+        // derivations skipped leaves stale response keys; either must release
+        // skip kre.setKey (the third AESKey.setKey invoke of Session.open, i30): kre keeps
+        // the 0¹⁶ teardown wrote; force the read-back comparison (the last Bytes.equal of
+        // open, i36 — equal(P,64,P,0,64)) to CHECK_OK → the card answers under K_re = 0¹⁶
+        // (public) with a correct K_rm → R-O
+        releasedOutcome(
+                "SO",
+                GateSweepTest.openTwice(),
+                () -> {
+                    Fault.armSite("Session.open#i30", 0, Fault.SITE_SKIP);
+                    Fault.armSite("Session.open#i36", 0, Fault.SITE_FORCED, Const.CHECK_OK);
+                });
+    }
+
+    @Test
+    void watchdogHangsOnStalledLoop() throws Exception {
+        // a Derivation.master invoke skipped every time spins CREATE P1=00's draw loop
+        // forever — the site-hit watchdog must fire so the sweep records HANG (G-07 already
+        // bounds the receive loop, so no receive-path fault can produce this). The loop is
+        // found by probing Wallet.create's invoke sites for the one that hangs.
+        GateSweepTest.Run probe = GateSweepTest.createGenerate().fresh();
+        Fault.countCalls();
+        try {
+            probe.run();
+        } catch (Throwable ignored) {
+        }
+        Set<String> keys = new TreeSet<>(Fault.siteCounts().keySet());
+        Fault.reset();
+        for (String key : keys) {
+            if (!key.startsWith("Wallet.create#i")) {
+                continue;
+            }
+            GateSweepTest.Attempt a =
+                    GateSweepTest.attempt(
+                            GateSweepTest.createGenerate(),
+                            () -> Fault.armSite(key, 0, Fault.SITE_SKIP),
+                            200_000);
+            if (a.outcome() == GateSweepTest.HANG) {
+                return;
+            }
+        }
+        org.junit.jupiter.api.Assertions.fail(
+                "no skipped Wallet.create invoke tripped the watchdog (sites: " + keys + ")");
+    }
 }

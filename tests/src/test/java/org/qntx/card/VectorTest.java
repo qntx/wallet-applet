@@ -286,7 +286,7 @@ final class VectorTest {
         for (Map<String, Object> c : Vecs.list(doc, "invalidMaster")) {
             byte[] il = hex(c, "il");
             boolean valid =
-                    ModArith.isZero(il, (short) 0) != Const.CHECK_OK
+                    Bytes.isZero(il, (short) 0, (short) 32) != Const.CHECK_OK
                             && m.below(ModArith.MOD_N, il, (short) 0) == Const.CHECK_OK;
             assertEquals(c.get("valid"), valid, (String) c.get("name"));
         }
@@ -296,7 +296,7 @@ final class VectorTest {
             boolean valid = m.below(ModArith.MOD_N, il, (short) 0) == Const.CHECK_OK;
             if (valid) {
                 m.addMod(ModArith.MOD_N, il, (short) 0, parent, (short) 0, out, (short) 0);
-                valid = ModArith.isZero(out, (short) 0) != Const.CHECK_OK;
+                valid = Bytes.isZero(out, (short) 0, (short) 32) != Const.CHECK_OK;
             }
             assertEquals(c.get("valid"), valid, (String) c.get("name"));
             if (valid) {

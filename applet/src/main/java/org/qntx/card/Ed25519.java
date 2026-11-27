@@ -11,7 +11,7 @@ import javacard.framework.Util;
  * SIGN_ED25519 (§9.11, §12.3): the hedged, single-pass Ed25519 signature — begin derives the key,
  * commits T-EDCTR and produces the nonce {@code r} and {@code R}, update streams the message into
  * the shared SHA-512 engine and finish computes {@code S = (r + k·a) mod ℓ} with the masked
- * recombination of §16.2 item 6 and the {@code S·G_W = R + k·A} self-verification of §16.2 item 5.
+ * recombination of §16.2 item 7 and the {@code S·G_W = R + k·A} self-verification of §16.2 item 6.
  *
  * <p>Stream state in {@link Mem#edStream} {@code a(32) ‖ r(32) ‖ R(65) ‖ A(65)} — {@code a}, {@code
  * r} big-endian scalars, {@code R}, {@code A} uncompressed Wei25519 points.
@@ -156,8 +156,8 @@ final class Ed25519 {
 
     /**
      * {@code P1 = 0x02} finish (§9.11): {@code chunk} completes the stream; response {@code
-     * le32(S)} (32 B) at {@code buf[0]} with {@code S = (r + k·a) mod ℓ} per §16.2 item 6 and the
-     * {@code S·G_W = R + k·A} self-check of §16.2 item 5, twice.
+     * le32(S)} (32 B) at {@code buf[0]} with {@code S = (r + k·a) mod ℓ} per §16.2 item 7 and the
+     * {@code S·G_W = R + k·A} self-check of §16.2 item 6, twice.
      */
     short finish(byte[] buf, short dataOff, short dataLen) {
         if (session.pending() != Const.PENDING_STREAM) {
@@ -172,10 +172,10 @@ final class Ed25519 {
         Bytes.reverse(n, (short) 0, h, (short) 0, (short) 64);
         modArith.reduce512(h, (short) 0, h, F_K);
         Util.arrayCopy(ed, ED_R, h, F_R, (short) 32);
-        // S = ((r + k·a₁) + k·a₂) mod ℓ, shares re-drawn per signature (§16.2 item 6)
+        // S = ((r + k·a₁) + k·a₂) mod ℓ, shares re-drawn per signature (§16.2 item 7)
         modArith.share(ModArith.MOD_L, ed, ED_A, h, (short) 0, h, (short) 32);
         modArith.mulMasked(ModArith.MOD_L, h, F_R, F_K, (short) 0, (short) 32, F_S, F_TMP);
-        // self-verify (§16.2 item 5): c = ℓ − k, V = S·G_W + c·A must equal R — twice
+        // self-verify (§16.2 item 6): c = ℓ − k, V = S·G_W + c·A must equal R — twice
         modArith.negateIf(ModArith.MOD_L, h, F_K, (short) 1);
         wei.mul(h, F_K, ed, ED_PT_A, p, (short) 0);
         wei.mulAdd(h, F_S, p, (short) 0, p, (short) 65);

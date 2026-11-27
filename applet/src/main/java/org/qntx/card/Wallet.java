@@ -44,6 +44,13 @@ final class Wallet {
     /** {@link Mem#H} slot of the 49-byte {@code members} staging block of CREATE and T-INSTALL. */
     private static final short H_MEMBERS = 0;
 
+    /**
+     * {@link Mem#H} slot of the second {@code seed} computation of CREATE {@code P1 = 0} — the
+     * {@link #H_MEMBERS} region under its own name: dead before {@link Derivation#master}
+     * overwrites {@code H}, and the members block is staged after the draw loop.
+     */
+    private static final short H_SEED = 0;
+
     private final Mem mem;
     private final State state;
     private final Session session;
@@ -125,10 +132,13 @@ final class Wallet {
 
     /**
      * CREATE (§9.4). Data checks: {@code others} pairwise distinct and none {@code == ID(A)}, then
-     * the seed/master validity (each {@code 6A80}). {@code P1 = 0} draws {@code t} and hashes
-     * {@code seed = SHA-512(label ‖ t ‖ hostEntropy)}, redrawing while the master is invalid;
-     * {@code P1 = 1} takes the given seed. On success: T-CREATE, {@code verified ← YES}, the seed
-     * stays in {@link Mem#seed}, response {@code WalletInfo} (§9.2).
+     * the seed/master validity (each {@code 6A80}). {@code P1 = 0} draws {@code t} into a cleared
+     * slot, checks it non-zero and hashes {@code seed = SHA-512(label ‖ t ‖ hostEntropy)} twice
+     * into separate buffers, compared in constant time, redrawing while the master is invalid;
+     * {@code P1 = 1} takes the given seed, compared with the staged copy. Both modes compare the
+     * staged access hash with its source before T-CREATE (§16.2 item 4). On success: T-CREATE,
+     * {@code verified ← YES}, the seed stays in {@link Mem#seed}, response {@code WalletInfo}
+     * (§9.2).
      */
     short create(byte[] buf, byte p1, short dataOff, short dataLen) {
         byte[] w = mem.W;
@@ -150,25 +160,34 @@ final class Wallet {
                 }
             }
         }
+        byte[] h = mem.H;
         short origin;
         if (p1 == 0) {
-            // a command that died between update and doFinal leaves pending bytes
-            mem.sha512.reset();
             for (; ; ) {
+                // t is drawn into a cleared slot and checked non-zero: a skipped or
+                // truncated draw leaves the wiped 0³² and is a detected fault (§9.4)
+                Bytes.wipe(w, W_T, Const.HASH_LEN);
                 mem.random.nextBytes(w, W_T, Const.HASH_LEN);
-                mem.sha512.update(Const.LABEL_SEED, (short) 0, (short) Const.LABEL_SEED.length);
-                mem.sha512.update(w, W_T, Const.HASH_LEN);
-                mem.sha512.doFinal(
-                        buf,
-                        (short) (dataOff + Const.HASH_LEN),
-                        Const.HASH_LEN,
-                        mem.seed,
-                        (short) 0);
+                if (Bytes.isZero(w, W_T, Const.HASH_LEN) != Const.CHECK_FAIL) {
+                    ISOException.throwIt(Const.SW_FAULT);
+                }
+                short entropy = (short) (dataOff + Const.HASH_LEN);
+                // the seed is computed twice into separate buffers and compared: a
+                // single fault inside one hash leaves a mismatch (§16.2 item 4)
+                seedHash(buf, entropy, mem.seed, (short) 0);
+                seedHash(buf, entropy, h, H_SEED);
+                if (Bytes.equal(mem.seed, (short) 0, h, H_SEED, (short) 64) != Const.CHECK_OK) {
+                    ISOException.throwIt(Const.SW_FAULT);
+                }
                 if (derivation.master(
                                 mem.seed, (short) 0, (short) mem.seed.length, mem.N, (short) 0)
                         == Const.CHECK_OK) {
                     break;
                 }
+            }
+            // a zero seed never reaches the wrap whatever produced it (§9.4)
+            if (Bytes.isZero(mem.seed, (short) 0, (short) 64) != Const.CHECK_FAIL) {
+                ISOException.throwIt(Const.SW_FAULT);
             }
             origin = Const.ORIGIN_GENERATED;
         } else {
@@ -178,6 +197,18 @@ final class Wallet {
                     mem.seed,
                     (short) 0,
                     (short) mem.seed.length);
+            // the staged seed is compared with its source: a skipped copy leaves
+            // zeros, not the seed the host sent (§16.2 item 4)
+            if (Bytes.equal(
+                            mem.seed,
+                            (short) 0,
+                            buf,
+                            (short) (dataOff + Const.HASH_LEN),
+                            (short) 64)
+                    != Const.CHECK_OK) {
+                Bytes.wipe(mem.seed, (short) 0, (short) mem.seed.length);
+                ISOException.throwIt(Const.SW_FAULT);
+            }
             if (derivation.master(mem.seed, (short) 0, (short) mem.seed.length, mem.N, (short) 0)
                     != Const.CHECK_OK) {
                 Bytes.wipe(mem.seed, (short) 0, (short) mem.seed.length);
@@ -188,7 +219,6 @@ final class Wallet {
         derivation.wipeCaches();
         // the members block c ‖ ID(A) ‖ others ‖ 0* and the wrap are prepared before the
         // transaction opens (§16.1 item 2)
-        byte[] h = mem.H;
         h[H_MEMBERS] = (byte) (m + 1);
         Util.arrayCopy(p, P_IDA, h, (short) (H_MEMBERS + 1), (short) 16);
         Util.arrayFillNonAtomic(h, (short) (H_MEMBERS + 17), (short) 32, (byte) 0);
@@ -200,6 +230,12 @@ final class Wallet {
         wrap(w, mem.seed, (short) 0);
         // W_T is dead past the draw loop: the link-scalar overwrite of §4.3
         secp.randomScalar(w, W_T);
+        // the staged access hash is compared with its source, immediately before the
+        // guarded life checks (§16.2 item 4): a skipped copy leaves the stale
+        // SHA-256(A) identity() wrote, which the host never sent
+        if (Bytes.equal(w, W_H, buf, dataOff, Const.HASH_LEN) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         // the guarded life check, evaluated twice, immediately before T-CREATE (§16.2 item 4)
         if (state.life() != Const.LIFE_BLANK) {
             ISOException.throwIt(Const.SW_FAULT);
@@ -298,6 +334,12 @@ final class Wallet {
         Util.arrayCopy(buf, dataOff, w, W_H, Const.HASH_LEN);
         mem.random.nextBytes(w, W_NEWKEY, Const.AES_KEY_LEN);
         wrap(w, mem.seed, (short) 0);
+        // the staged access hash is compared with its source, immediately before the
+        // guarded checks (§16.2 item 4): a skipped copy leaves whatever unwrap's
+        // scratch held, which the host never sent
+        if (Bytes.equal(w, W_H, buf, dataOff, Const.HASH_LEN) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         // the guarded check, evaluated twice, immediately before T-CHANGE (§16.2 item 4);
         // the second evaluation reads the shadow word
         if (session.verified() != Const.VERIFIED_YES) {
@@ -484,6 +526,19 @@ final class Wallet {
         return Bytes.equal(w, W_FP, mem.P, P_SFP, Const.HASH_LEN);
     }
 
+    /**
+     * {@code out = SHA-512("qntx-card/v1/seed" ‖ t ‖ hostEntropy)} (§9.4): one seed computation of
+     * the CREATE {@code P1 = 0} draw loop — the card's {@code t} is at {@code W_T}, the host's
+     * entropy in {@code buf} — so the loop can compute it twice independently (§16.2 item 4).
+     * Resets the engine: a command that died between update and doFinal leaves pending bytes.
+     */
+    private void seedHash(byte[] buf, short entropyOff, byte[] out, short oOff) {
+        mem.sha512.reset();
+        mem.sha512.update(Const.LABEL_SEED, (short) 0, (short) Const.LABEL_SEED.length);
+        mem.sha512.update(mem.W, W_T, Const.HASH_LEN);
+        mem.sha512.doFinal(buf, entropyOff, Const.HASH_LEN, out, oOff);
+    }
+
     /** {@code out = SHA-256("qntx-card/v1/fingerprint" ‖ seed)} (§10.1). */
     void fpHash(byte[] seed, short sOff, byte[] out, short oOff) {
         // a command that died between update and doFinal leaves pending bytes
@@ -537,6 +592,17 @@ final class Wallet {
         mem.random.nextBytes(w, W_NEWKEY, Const.AES_KEY_LEN);
         wrap(w, mem.seed, (short) 0);
         secp.randomScalar(w, W_T);
+        // the staged seed and access hash are compared with their payload sources,
+        // immediately before the guarded life reads (§16.2 item 4): a skipped copy
+        // leaves zeros or the stale SHA-256(A) of identity.id, which the genuine
+        // source card never sent
+        if (Bytes.equal(mem.seed, (short) 0, buf, (short) (dataOff + 1), (short) 64)
+                != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
+        if (Bytes.equal(w, W_H, buf, (short) (dataOff + 65), Const.HASH_LEN) != Const.CHECK_OK) {
+            ISOException.throwIt(Const.SW_FAULT);
+        }
         // the guarded life check, evaluated twice, immediately before T-INSTALL (§16.2 item 4)
         if (state.life() != life || state.life() != life) {
             ISOException.throwIt(Const.SW_FAULT);

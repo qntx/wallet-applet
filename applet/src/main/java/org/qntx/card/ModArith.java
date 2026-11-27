@@ -9,7 +9,7 @@ import javacardx.crypto.Cipher;
 
 /**
  * Constant-time arithmetic modulo the secp256k1 field prime {@code p}, the secp256k1 group order
- * {@code n} and the ed25519 prime-subgroup order {@code ℓ} (§16.2 item 7, §16.4). Squaring is
+ * {@code n} and the ed25519 prime-subgroup order {@code ℓ} (§16.2 item 8, §16.4). Squaring is
  * {@code x² mod m} through a {@code LENGTH_RSA_512} private key with modulus {@code 0³² ‖ m} and
  * exponent 2 (protocol.md §3 item 1); multiplication is {@code ((a + b)² − (a − b)²)/4} with {@code
  * a + b} reduced by one conditional subtraction of {@code m}, {@code a − b} computed as {@code a −
@@ -257,7 +257,7 @@ final class ModArith {
     /**
      * {@code out = a·b mod m} = {@code ((a+b)² − (a−b)²)/4 mod m}; operands 32-byte, below {@code
      * m}. Every RSA input is reduced below the modulus in constant time before {@code doFinal}
-     * (§16.2 item 7).
+     * (§16.2 item 8).
      */
     void mul(byte m, byte[] a, short aOff, byte[] b, short bOff, byte[] out, short oOff) {
         byte[] w = mem.W;
@@ -383,7 +383,7 @@ final class ModArith {
     }
 
     /**
-     * The §16.2 item 6 additive split {@code x = s1 + s2 mod m}: {@code s1} is 32 fresh random
+     * The §16.2 item 7 additive split {@code x = s1 + s2 mod m}: {@code s1} is 32 fresh random
      * bytes reduced by {@link #reduce} (no rejection loop — a uniform share needs only a
      * constant-time reduction), {@code s2 = (x − s1) mod m}. {@code s1} and {@code s2} are distinct
      * arrays or offsets outside {@link Mem#W}.
@@ -442,15 +442,6 @@ final class ModArith {
             borrow = (short) ((t >> 8) & 1);
         }
         return borrow == 1 ? Const.CHECK_OK : Const.CHECK_FAIL;
-    }
-
-    /** Coded {@code CHECK_OK} iff the 32-byte {@code x} is all zero, constant time. */
-    static short isZero(byte[] x, short xOff) {
-        short any = 0;
-        for (short i = 0; i < 32; i++) {
-            any = (short) (any | (x[(short) (xOff + i)] & 0xFF));
-        }
-        return any == 0 ? Const.CHECK_OK : Const.CHECK_FAIL;
     }
 
     /**

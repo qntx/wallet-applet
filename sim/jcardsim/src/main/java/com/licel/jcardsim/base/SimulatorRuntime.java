@@ -310,6 +310,9 @@ public class SimulatorRuntime {
                     if (e instanceof org.qntx.card.sim.PowerLoss) {
                         throw (org.qntx.card.sim.PowerLoss) e;
                     }
+                    if (e instanceof org.qntx.card.sim.Fault.Hang) {
+                        throw (org.qntx.card.sim.Fault.Hang) e;
+                    }
                     Util.setShort(theSW, (short)0, ISO7816.SW_UNKNOWN);
                     if (e instanceof CardException) {
                         Util.setShort(theSW, (short)0, ((CardException)e).getReason());
@@ -407,6 +410,9 @@ public class SimulatorRuntime {
             // it has to reach Card.transmit (patch 5)
             if (e instanceof org.qntx.card.sim.PowerLoss) {
                 throw (org.qntx.card.sim.PowerLoss) e;
+            }
+            if (e instanceof org.qntx.card.sim.Fault.Hang) {
+                throw (org.qntx.card.sim.Fault.Hang) e;
             }
             if (transactionDepth != 0) {
                 // an exception leaving process() with a transaction

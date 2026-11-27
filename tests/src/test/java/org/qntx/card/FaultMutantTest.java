@@ -778,7 +778,7 @@ final class FaultMutantTest {
         assertEquals(0x6A80, inner(0x30, 0, Vecs.pathSecpEvm()).sw());
 
         verified();
-        Fault.arm("ModArith.isZero", 2, Const.CHECK_OK);
+        Fault.arm("Bytes.isZero", 2, Const.CHECK_OK);
         assertEquals(0x6A80, inner(0x30, 0, Vecs.pathSecpEvm()).sw());
     }
 
@@ -790,7 +790,7 @@ final class FaultMutantTest {
         assertEquals(0x6F00, inner(0x30, 0, Vecs.pathSecpEvm()).sw());
 
         verified();
-        Fault.arm("ModArith.isZero", 1, Const.CHECK_OK);
+        Fault.arm("Bytes.isZero", 1, Const.CHECK_OK);
         assertEquals(0x6F00, inner(0x30, 0, Vecs.pathSecpEvm()).sw());
     }
 
@@ -892,8 +892,8 @@ final class FaultMutantTest {
         System.arraycopy(Vecs.accessHash(), 0, data, 0, 32);
         System.arraycopy(Vecs.entropy(), 0, data, 32, 32);
         assertEquals(0x9000, inner(0x21, 0, data).sw());
-        assertEquals(5, card.digests(javacard.security.MessageDigest.ALG_SHA_512));
-        assertEquals(849, card.digestBytes(javacard.security.MessageDigest.ALG_SHA_512));
+        assertEquals(6, card.digests(javacard.security.MessageDigest.ALG_SHA_512));
+        assertEquals(930, card.digestBytes(javacard.security.MessageDigest.ALG_SHA_512));
     }
 
     @Test
@@ -1007,13 +1007,13 @@ final class FaultMutantTest {
         Response r = inner(0x21, 0, data);
         assertEquals(0x9000, r.sw());
         assertEquals(
-                5,
+                6,
                 card.digests(javacard.security.MessageDigest.ALG_SHA_512),
-                "one seed doFinal + two master HMACs");
+                "two seed doFinals + two master HMACs");
         assertEquals(
-                3,
+                4,
                 card.resets(javacard.security.MessageDigest.ALG_SHA_512),
-                "seed draw + two HMACs");
+                "two seed hashes + two HMACs");
     }
 
     @Test

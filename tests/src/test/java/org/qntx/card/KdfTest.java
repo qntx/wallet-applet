@@ -38,6 +38,11 @@ final class KdfTest {
             byte[] label = Vecs.hex(c, "label");
             byte[] ctx = Vecs.hex(c, "ctx");
             int len = ((Number) c.get("len")).intValue();
+            if (len != 32 && len != 64) {
+                // the applet's kdf derives full blocks only (len ∈ {32, 64}); the 16/33
+                // vectors stay host/vector-generator checks
+                continue;
+            }
             Arrays.fill(out, (byte) 0xAA);
             Kdf.kdf(
                     mem,

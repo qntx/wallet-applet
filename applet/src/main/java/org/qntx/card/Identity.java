@@ -206,7 +206,7 @@ final class Identity {
 
     /**
      * Signs the 32-byte precomputed hash with the identity key and returns {@code r ‖ s} (§1).
-     * Every signature is self-verified before output (§16.2 item 5, AGENTS invariant 5); a failed
+     * Every signature is self-verified before output (§16.2 item 6, AGENTS invariant 5); a failed
      * self-verification is a fault.
      */
     void signHash(byte[] hash, short hOff, byte[] out, short oOff) {

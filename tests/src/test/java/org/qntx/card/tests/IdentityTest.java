@@ -78,7 +78,7 @@ final class IdentityTest {
     @Test
     void openCardEphIsOnCurve() throws Exception {
         // A successful OPEN already means the card signed TH and self-verified the
-        // signature under A (§16.2 item 5); the ephemeral point must also be on curve.
+        // signature under A (§16.2 item 6); the ephemeral point must also be on curve.
         Card card = Vecs.factory();
         byte[] a = Vecs.cardA(card);
         assertEquals(0x9000, Vecs.sw(card.transmit(Vecs.personalizeApdu(Vecs.certFor(a)))));
