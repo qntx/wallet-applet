@@ -595,8 +595,8 @@ development card A (J3R180 hardware reporting JCOP build `J3R3510236310400`, CPL
 (`$A/audit-impl/evidence/card/functional.out`); admission must be repeated on each production
 batch. Multi-card flows are simulation-only while only one development card exists.
 
-Final card-A run (2026-11-25, CAP sha256 `39cc8dac…6ea9a436`, record
-`realcard/39cc8dac….txt`): the whole suite passed once,
+Final card-A run (2026-11-27, CAP sha256 `aeb9012e…6efab`, record
+`realcard/aeb9012e….txt`): the whole suite passed once,
 63 tests green, flows/tearing/NVM rows `unavailable` as designed; admission 6 ran the full
 §4.2 decision rule (80 × 10⁶ bits, every statistic's proportion and P-value_T inside bounds,
 `rng.json`); every timing row is inside its bound (`timing.md`, reproduced in the README;

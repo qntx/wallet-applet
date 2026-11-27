@@ -1,0 +1,80 @@
+qntx-card real-card record 3
+cap aeb9012eb1140194b16b4661cf433ca5d94cf83d877fd1d5e1aa6c368a66efab
+commit ef33d27896fcf4bffaf296d01d2c1c72a7178575
+tree-tests 83c9d2037be7fae2a1638df90bad0e34759cae1c
+tree-applet b97ef742b828f278903a9adef5aef2f3d64622ee
+tree-host 8ea500059d5b0b3915fc90abd041b4936683e006
+tree-sim 4abcf5fceaf85a44f0d805b690cf0eec85b06e18
+tree-buildSrc 6db96e7da990dd2f093766c802af15450325d95f
+params differential=1000 sequences=80 prims=all keep=false cap=tree memcap=tree probecap=tree
+date 2026-11-27T06:17:11.636978Z
+reader ACS ACR1552 1S CL Reader PICC
+atr 3B8580018073C821100E
+cplc 9f7f2a4790d3214700000000005021499178212092000000000000000016583f39393137380000000000000000
+identify fe45df2842010c0001a9525a431002c773f91f0208000000000000000103184a335233353130323336333130343030dce5c19cfe6d0dcf05010007010108082e5ad88409c9badb
+apdu-log-sha256 4f88d2985ef86a2c98d8f95859aae67ce2cb43fe16ac0c22a19353050d3a1f9d
+passed 63
+failed 0
+skipped 3
+class org.qntx.card.real.AdmissionRealCardTest PASS
+class org.qntx.card.real.CoreRealCardTest PASS
+class org.qntx.card.real.DifferentialRealCardTest PASS
+class org.qntx.card.real.FlowRealCardTest SKIP
+  skip flowsOnTheReferencePhones(): org.opentest4j.TestAbortedException: Assumption failed: unavailable: no phone harness yet (§10, before freeze)
+class org.qntx.card.real.InstallRealCardTest PASS
+class org.qntx.card.real.MemoryRealCardTest PASS
+class org.qntx.card.real.NvmRealCardTest SKIP
+  skip enduranceOnASacrificialCard(): org.opentest4j.TestAbortedException: Assumption failed: unavailable: no sacrificial card (never a development card, §10)
+class org.qntx.card.real.PrimitiveRealCardTest PASS
+class org.qntx.card.real.SignRealCardTest PASS
+class org.qntx.card.real.TearingRealCardTest SKIP
+  skip fieldCutAtProgrammableInstants(): org.opentest4j.TestAbortedException: Assumption failed: unavailable: no programmable reader yet (§10)
+class org.qntx.card.real.TimingRealCardTest PASS
+class org.qntx.card.real.WalletRealCardTest PASS
+
+| command | n | min | median | p95 | max | bound ms | ≤bound |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| INIT_STEP | 7 | 30.0 | 60.4 | 136.1 | 136.1 | 500 | yes |
+| GET_IDENTITY | 1 | 30.0 | 30.0 | 30.0 | 30.0 | 1500 | yes |
+| PERSONALIZE | 1 | 609.6 | 609.6 | 609.6 | 609.6 | 1500 | yes |
+| OPEN | 20 | 342.3 | 345.3 | 345.9 | 346.6 | 1500 | yes |
+| VERIFY wrong | 20 | 80.2 | 80.5 | 80.7 | 81.6 | 1500 | yes |
+| VERIFY right | 20 | 214.9 | 215.3 | 216.1 | 217.9 | 1500 | yes |
+| STATUS | 20 | 33.7 | 33.8 | 34.1 | 34.9 | 1500 | yes |
+| PUBLIC_KEY secp depth3 cold | 20 | 235.3 | 237.0 | 237.2 | 238.0 | 1500 | yes |
+| PUBLIC_KEY secp depth3 warm | 20 | 124.5 | 124.9 | 125.2 | 125.7 | 1500 | yes |
+| PUBLIC_KEY secp depth5 cold | 20 | 411.0 | 411.4 | 411.8 | 411.8 | 1500 | yes |
+| PUBLIC_KEY secp depth5 warm | 20 | 125.6 | 125.9 | 126.3 | 126.3 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 cold | 20 | 212.3 | 212.5 | 212.9 | 213.0 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth3 warm | 20 | 150.6 | 151.0 | 151.2 | 151.3 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 cold | 20 | 254.5 | 254.7 | 255.1 | 255.1 | 1500 | yes |
+| PUBLIC_KEY ed25519 depth5 warm | 20 | 151.6 | 152.0 | 152.2 | 152.3 | 1500 | yes |
+| SIGN_ECDSA depth5 cold | 20 | 602.2 | 602.9 | 606.4 | 610.8 | 1500 | yes |
+| SIGN_ECDSA depth5 warm | 20 | 315.5 | 315.9 | 318.4 | 318.7 | 1500 | yes |
+| SIGN_BIP340 untweaked cold | 20 | 1005.6 | 1007.8 | 1010.8 | 1010.9 | 1500 | yes |
+| SIGN_BIP340 untweaked warm | 20 | 720.8 | 723.6 | 727.3 | 727.3 | 1500 | yes |
+| SIGN_BIP340 tweak cold | 20 | 1052.4 | 1058.5 | 1059.2 | 1059.2 | 1500 | yes |
+| SIGN_BIP340 tweak warm | 20 | 769.6 | 770.0 | 770.5 | 770.5 | 1500 | yes |
+| SIGN_ED25519 begin cold | 60 | 498.2 | 499.2 | 499.5 | 499.6 | 1500 | yes |
+| SIGN_ED25519 finish cold | 60 | 669.6 | 671.2 | 674.7 | 674.9 | 1500 | yes |
+| SIGN_ED25519 64B total cold | 20 | 1173.5 | 1173.8 | 1174.1 | 1174.1 | — | — |
+| SIGN_ED25519 begin warm | 60 | 416.5 | 417.1 | 417.4 | 417.7 | 1500 | yes |
+| SIGN_ED25519 finish warm | 60 | 669.4 | 671.3 | 671.9 | 672.1 | 1500 | yes |
+| SIGN_ED25519 64B total warm | 20 | 1087.9 | 1088.6 | 1089.1 | 1089.3 | — | — |
+| SIGN_ED25519 update | 880 | 44.1 | 46.9 | 47.1 | 48.0 | 1500 | yes |
+| SIGN_ED25519 1232B total cold | 20 | 1401.2 | 1402.8 | 1403.5 | 1403.6 | — | — |
+| SIGN_ED25519 1232B total warm | 20 | 1320.1 | 1320.7 | 1321.1 | 1321.4 | — | — |
+| SIGN_ED25519 4032B total cold | 20 | 1954.2 | 1959.6 | 1960.7 | 1962.0 | — | — |
+| SIGN_ED25519 4032B total warm | 20 | 1876.4 | 1878.0 | 1878.5 | 1878.7 | — | — |
+| WAIT | 20 | 969.4 | 969.6 | 969.8 | 970.0 | 1500 | yes |
+| CREATE P1=0 | 20 | 227.9 | 228.2 | 228.4 | 231.0 | 1500 | yes |
+| ERASE | 40 | 54.6 | 54.8 | 54.9 | 55.0 | 1500 | yes |
+| CREATE P1=1 | 20 | 211.9 | 212.3 | 212.6 | 212.6 | 1500 | yes |
+| OFFER offer=NONE | 1 | 217.1 | 217.1 | 217.1 | 217.1 | 1500 | yes |
+| OFFER offer=VALID | 20 | 163.3 | 163.6 | 163.8 | 163.8 | 1500 | yes |
+| EXPORT P1=0 | 10 | 1146.9 | 1147.5 | 1151.3 | 1151.3 | 1500 | yes |
+| EXPORT P1=1 | 10 | 71.0 | 71.2 | 71.6 | 71.6 | 1500 | yes |
+| IMPORT P1=0 | 10 | 1154.0 | 1154.5 | 1159.1 | 1159.1 | 1500 | yes |
+| IMPORT P1=1 | 10 | 264.8 | 265.1 | 265.5 | 265.5 | 1500 | yes |
+| SELECT | 20 | 31.5 | 31.6 | 31.8 | 62.9 | 1500 | yes |
+| SELECT after reset | 20 | 31.6 | 31.8 | 31.9 | 31.9 | 1500 | yes |

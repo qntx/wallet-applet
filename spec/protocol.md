@@ -748,7 +748,7 @@ Data: empty (`Lc = 0`, else `6700`). Allowed in `LOADED`; no access code is requ
 `waited ← min(waited + 1, W)`. No persistent write. Response: empty. `waited` is session state
 (cleared by teardown, §8.5) and is consumed by `VERIFY` (§9.5 step 4). A host that sees
 `tries ≤ L − F` in `STATUS` sends `W` `WAIT` commands before `VERIFY`; on the baseline chip one
-`WAIT` takes about 1 s (969 ms on the development card, §16.6; §3 item 9 bounds it to
+`WAIT` takes about 1 s (970 ms on the development card, §16.6; §3 item 9 bounds it to
 900–1100 ms), so such an attempt needs about 15 s of continuous contact.
 
 ## 10. Key storage and derivation
@@ -1225,45 +1225,46 @@ host-side round trip including transport; median / p95 ms, n):
 
 | Command | median | p95 | n |
 | --- | --- | --- | --- |
-| `SELECT` | 31 | 31 | 20 |
-| `GET_IDENTITY` | 29 | 29 | 1 |
-| initialisation step (max) | 148 | 148 | 7 |
-| `PERSONALIZE` | 603 | 603 | 1 |
-| `OPEN` | 317 | 318 | 20 |
-| `STATUS` | 33 | 33 | 20 |
+| `SELECT` | 32 | 32 | 20 |
+| `GET_IDENTITY` | 30 | 30 | 1 |
+| initialisation step (max) | 136 | 136 | 7 |
+| `PERSONALIZE` | 610 | 610 | 1 |
+| `OPEN` | 345 | 346 | 20 |
+| `STATUS` | 34 | 34 | 20 |
 | `VERIFY` right | 215 | 216 | 20 |
-| `VERIFY` wrong | 80 | 80 | 20 |
-| `WAIT` | 969 | 969 | 20 |
-| `CREATE` `P1 = 0` | 207 | 208 | 20 |
-| `CREATE` `P1 = 1` | 202 | 203 | 20 |
-| `ERASE` | 54 | 54 | 40 |
-| `PUBLIC_KEY` secp256k1, depth 5, cold | 412 | 412 | 20 |
+| `VERIFY` wrong | 80 | 81 | 20 |
+| `WAIT` | 970 | 970 | 20 |
+| `CREATE` `P1 = 0` | 228 | 228 | 20 |
+| `CREATE` `P1 = 1` | 212 | 213 | 20 |
+| `ERASE` | 55 | 55 | 40 |
+| `PUBLIC_KEY` secp256k1, depth 5, cold | 411 | 412 | 20 |
 | `PUBLIC_KEY` secp256k1, depth 5, warm | 126 | 126 | 20 |
-| `PUBLIC_KEY` ed25519, depth 5, cold | 254 | 254 | 20 |
-| `PUBLIC_KEY` ed25519, depth 5, warm | 151 | 152 | 20 |
-| `SIGN_ECDSA`, depth 5, cold | 604 | 607 | 20 |
-| `SIGN_ECDSA`, depth 5, warm | 316 | 316 | 20 |
-| `SIGN_BIP340` (tweak), cold | 1060 | 1061 | 20 |
-| `SIGN_BIP340` (tweak), warm | 770 | 771 | 20 |
-| `SIGN_ED25519` begin, cold | 498 | 499 | 60 |
-| `SIGN_ED25519` update (236 B) | 46 | 46 | 880 |
-| `SIGN_ED25519` finish, cold | 670 | 674 | 60 |
+| `PUBLIC_KEY` ed25519, depth 5, cold | 255 | 255 | 20 |
+| `PUBLIC_KEY` ed25519, depth 5, warm | 152 | 152 | 20 |
+| `SIGN_ECDSA`, depth 5, cold | 603 | 606 | 20 |
+| `SIGN_ECDSA`, depth 5, warm | 316 | 318 | 20 |
+| `SIGN_BIP340` (tweak), cold | 1058 | 1059 | 20 |
+| `SIGN_BIP340` (tweak), warm | 770 | 770 | 20 |
+| `SIGN_ED25519` begin, cold | 499 | 500 | 60 |
+| `SIGN_ED25519` update (236 B) | 47 | 47 | 880 |
+| `SIGN_ED25519` finish, cold | 671 | 675 | 60 |
 | `OFFER` first | 217 | 217 | 1 |
-| `OFFER` valid | 163 | 163 | 20 |
-| `EXPORT` `P1 = 0x00` | 1060 | 1064 | 10 |
-| `EXPORT` `P1 = 0x01` | 61 | 61 | 10 |
-| `IMPORT` `P1 = 0x00` | 1129 | 1131 | 10 |
-| `IMPORT` `P1 = 0x01` | 255 | 256 | 10 |
+| `OFFER` valid | 164 | 164 | 20 |
+| `EXPORT` `P1 = 0x00` | 1148 | 1151 | 10 |
+| `EXPORT` `P1 = 0x01` | 71 | 72 | 10 |
+| `IMPORT` `P1 = 0x00` | 1155 | 1159 | 10 |
+| `IMPORT` `P1 = 0x01` | 265 | 265 | 10 |
 
 The slowest command (`IMPORT` `P1 = 0x00`, which decompresses and verifies the peer key in
 each evaluation, §16.2) has a margin of 1.3× to the limit; `WAIT` 1.5× (1.1× at the 1100 ms
 upper bound of §3 item 9). A command record costs about
-33 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
-⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,397 ms cold
-(498 + 5 × 46 + 670). `EXPORT`/`IMPORT` are timed against a member emulated by the host
+34 ms (`STATUS`); streaming a message of `m` bytes to `SIGN_ED25519` costs begin +
+⌈m/236⌉ − 1 updates + finish — the 1,232-byte message measured 1,403 ms cold
+(499 + 5 × 47 + 671). `EXPORT`/`IMPORT` are timed against a member emulated by the host
 — the two-card flow on silicon is not run. `docs/architecture.md` §10 lists the real-card
-timing suite. The table was measured on the build before the item 5 derivation and staged-copy
-gates; the build with those gates is re-measured before release.
+timing suite. The table is the run recorded in
+`realcard/aeb9012eb1140194b16b4661cf433ca5d94cf83d877fd1d5e1aa6c368a66efab.txt`, on the
+build with the item 5 derivation and staged-copy gates.
 
 ### 16.7 Randomness
 
