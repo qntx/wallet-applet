@@ -130,17 +130,18 @@ jobs:
       - name: Both generators agree
         run: spec/vectors/gen/check.sh
 
-  # the single-fault sweep (GateSweepTest) is single-forked and minutes-per-scenario —
-  # too long for the build job; it runs here in four scenario shards, one per vCPU.
-  # The woven fault tests and release-predicate self-checks stay in `build` via the
-  # faultGates task
+  # the single-fault sweep (GateSweepTest) is single-forked and hours in total —
+  # too long for the build job; it runs here in eight job shards, hashed by
+  # (scenario, site, occurrence, mode) so every shard gets an even share of
+  # attempts. The woven fault tests and release-predicate self-checks stay in
+  # `build` via the faultGates task
   sweep:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -154,8 +155,8 @@ jobs:
         with:
           validate-wrappers: true
           cache-read-only: ${{ github.event_name == 'pull_request' }}
-      - name: Gate sweep shard ${{ matrix.shard }}/4
-        run: ./gradlew :tests:gateSweep --no-build-cache -Dqntx.sweepShard=${{ matrix.shard }}/4
+      - name: Gate sweep shard ${{ matrix.shard }}/8
+        run: ./gradlew :tests:gateSweep --no-build-cache -Dqntx.sweepShard=${{ matrix.shard }}/8
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

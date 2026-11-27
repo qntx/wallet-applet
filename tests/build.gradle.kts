@@ -628,6 +628,9 @@ val gateSweep by tasks.registering(Test::class) {
     providers.systemProperty("qntx.sweepShard").orNull?.let {
         systemProperty("qntx.sweepShard", it)
     }
+    providers.systemProperty("qntx.sweepCount").orNull?.let {
+        systemProperty("qntx.sweepCount", it)
+    }
     systemProperty(
         "qntx.reports",
         layout.buildDirectory

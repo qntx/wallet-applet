@@ -1785,15 +1785,24 @@ final class GateSweepTest {
     }
 
     private void sweep(String name, Factory factory) throws Exception {
-        // CI shards the scenarios by name across matrix jobs (-Dqntx.sweepShard=i/N);
-        // String.hashCode is specified, so the split is deterministic everywhere
+        // CI shards the sweep rows across matrix jobs (-Dqntx.sweepShard=i/N): every
+        // (site, occurrence, mode) attempt is hashed to a shard, so the split is balanced
+        // by attempt count — a heavy scenario like SIn spreads over all shards instead of
+        // dominating one. String.hashCode is specified, so the split is deterministic
+        // everywhere
         String shard = System.getProperty("qntx.sweepShard", "0/1");
         int slash = shard.indexOf('/');
-        if (slash > 0
-                && Math.floorMod(name.hashCode(), Integer.parseInt(shard.substring(slash + 1)))
-                        != Integer.parseInt(shard.substring(0, slash))) {
-            return;
+        int shardIdx = 0;
+        int shardCnt = 1;
+        if (slash > 0) {
+            shardIdx = Integer.parseInt(shard.substring(0, slash));
+            shardCnt = Integer.parseInt(shard.substring(slash + 1));
         }
+        // qntx.sweepCount=N enumerates the attempts without running them and reports the
+        // row count each shard of an N-way split would get — CI balancing diagnostics
+        int countBuckets = Integer.parseInt(System.getProperty("qntx.sweepCount", "0"));
+        int buckets = countBuckets > 0 ? countBuckets : Math.max(1, shardCnt);
+        long[] shardRows = countBuckets > 0 ? new long[buckets] : null;
         // the counting run: unfaulted, must be refused
         Run probe = once(factory);
         Fault.countCalls();
@@ -1836,6 +1845,18 @@ final class GateSweepTest {
             }
             for (int[] o : occurrences(e.getValue(), kind.charAt(0))) {
                 for (int[] m : siteModes(kind)) {
+                    String mode = modeName(kind, m[0], m[1]);
+                    int bucket =
+                            Math.floorMod(
+                                    (name + '|' + key + '|' + o[0] + '|' + mode).hashCode(),
+                                    buckets);
+                    if (shardRows != null) {
+                        shardRows[bucket]++;
+                        continue;
+                    }
+                    if (shardCnt > 1 && bucket != shardIdx) {
+                        continue;
+                    }
                     Attempt a =
                             attempt(
                                     factory,
@@ -1850,7 +1871,7 @@ final class GateSweepTest {
                                     + ','
                                     + o[0]
                                     + ','
-                                    + modeName(kind, m[0], m[1])
+                                    + mode
                                     + ','
                                     + o[1]
                                     + ",\""
@@ -1869,6 +1890,18 @@ final class GateSweepTest {
             for (int occ = 1; occ <= e.getValue(); occ++) {
                 int o = occ;
                 for (short v : FORCED) {
+                    String mode = "ret=0x" + String.format("%04x", v & 0xFFFF);
+                    int bucket =
+                            Math.floorMod(
+                                    (name + '|' + method + '|' + o + '|' + mode).hashCode(),
+                                    buckets);
+                    if (shardRows != null) {
+                        shardRows[bucket]++;
+                        continue;
+                    }
+                    if (shardCnt > 1 && bucket != shardIdx) {
+                        continue;
+                    }
                     Attempt a = attempt(factory, () -> Fault.arm(method, o, v), watchdog);
                     runs++;
                     counts[a.outcome()]++;
@@ -1878,8 +1911,8 @@ final class GateSweepTest {
                                     + method
                                     + ','
                                     + o
-                                    + ",ret=0x"
-                                    + String.format("%04x", v & 0xFFFF)
+                                    + ","
+                                    + mode
                                     + ",0,\""
                                     + a.sws()
                                     + "\","
@@ -1890,6 +1923,14 @@ final class GateSweepTest {
         int verifies = calls.getOrDefault(Fault.ECDSA_VERIFY, 0);
         for (int occ = 1; occ <= verifies; occ++) {
             int o = occ;
+            int bucket = Math.floorMod((name + "|verify|" + o).hashCode(), buckets);
+            if (shardRows != null) {
+                shardRows[bucket]++;
+                continue;
+            }
+            if (shardCnt > 1 && bucket != shardIdx) {
+                continue;
+            }
             Attempt a = attempt(factory, () -> Fault.armVerifyTrue(o), watchdog);
             runs++;
             counts[a.outcome()]++;
@@ -1905,6 +1946,14 @@ final class GateSweepTest {
                             + OUTCOME[a.outcome()]);
         }
 
+        if (shardRows != null) {
+            for (int i = 0; i < shardRows.length; i++) {
+                System.out.printf(
+                        "sweep-count %s shard %d/%d: %d attempts%n",
+                        name, i, shardRows.length, shardRows[i]);
+            }
+            return;
+        }
         Path dir = Path.of(System.getProperty("qntx.reports", "build/reports"), "gate-sweep");
         Files.createDirectories(dir);
         Files.write(
