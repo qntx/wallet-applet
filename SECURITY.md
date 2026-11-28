@@ -54,6 +54,6 @@ The real-card record (`realcard/<cap-sha256>.txt`, gated by `:tests:checkRealCar
 run — the `tests/`, `applet/`, `host/`, `sim/` and `buildSrc/` trees must be clean and every
 input stamped by that run. The checker only establishes that the record is consistent with
 this build — the CAP hash, the five git trees, the commit, the run parameters and the suite
-shape; it cannot establish that a card was used, and nothing signs the record. `main`
-currently has no branch protection or ruleset, so nothing but the maintainer's review stands
-behind the commit that adds a record.
+shape; it cannot establish that a card was used, and nothing signs the record. The `main`
+ruleset (`.github/rulesets/`) requires a pull request and green CI but no second approval, so
+nothing but the maintainer's review stands behind the commit that adds a record.
